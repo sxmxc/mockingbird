@@ -64,4 +64,11 @@
 - **Styling framework**: Use Bulma for the public homepage controls and table/modal primitives, while keeping custom CSS only for the branded hero artwork, theming, and sticky-table behavior.
 - **Bulma discipline**: Favor near-stock Bulma table, modal, tag, button, and form treatments instead of layering bespoke chrome over those components.
 
+## 2026-03-15: CI/CD image and workflow strategy
+- **Workflow split**: Keep a fast CI workflow for backend tests, frontend lint/test/build, and Docker Compose smoke coverage, and a separate image workflow for runtime-image validation and registry publishing.
+- **Docker targets**: Preserve hot-reload local development through `dev` image targets in Compose, but publish dedicated `runtime` targets so release images do not ship Vite dev servers or `uvicorn --reload`.
+- **Registry/release model**: Publish API and admin images to GHCR as multi-arch `linux/amd64` and `linux/arm64` manifests. Treat `vX.Y.Z` git tags as official releases that emit semver tags plus `latest`, while default-branch builds emit branch, `edge`, and `sha-*` tags.
+- **Artifacts and provenance**: Upload per-image metadata artifacts (image name, version, digest, tags, build metadata/manifest) and attach provenance/SBOM data so CI/CD outputs are inspectable and easier to trust.
+- **Standalone deploy example**: Keep a separate GHCR-backed Compose example for environments without a local checkout, and default that example to `edge` for convenience while recommending explicit release tags for real deployments.
+
 *> Future decisions should append a dated entry with context and rationale.*

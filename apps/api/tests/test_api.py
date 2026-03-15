@@ -25,6 +25,7 @@ import app.db as db_module
 from app.db import create_db_and_tables, engine
 from app.main import app
 from app.models import EndpointDefinition
+from scripts.seed import DEVICE_MODELS
 
 
 def _reset_db() -> None:
@@ -367,9 +368,47 @@ def test_runtime_dispatch_matches_seeded_endpoints(seeded_db):
     created_user = create_response.json()
     assert {"id", "displayName", "email", "createdAt"} <= set(created_user.keys())
 
+    devices_response = client.get("/api/devices")
+    assert devices_response.status_code == 200
+    devices = devices_response.json()
+    assert isinstance(devices, list)
+    assert len(devices) >= 2
+    assert {"deviceId", "model", "status"} <= set(devices[0].keys())
+    UUID(devices[0]["deviceId"])
+
+    device_detail_response = client.get("/api/devices/example-device")
+    assert device_detail_response.status_code == 200
+    device = device_detail_response.json()
+    assert {"deviceId", "model", "status", "lastSeen"} <= set(device.keys())
+    UUID(device["deviceId"])
+
     health_response = client.get("/api/health")
     assert health_response.status_code == 200
     assert health_response.json() == {"status": "ok"}
+
+
+def test_seeded_device_schemas_use_curated_model_enum_defaults(seeded_db):
+    with Session(engine) as session:
+        endpoints = {
+            endpoint.slug: endpoint
+            for endpoint in session.execute(
+                select(EndpointDefinition).where(EndpointDefinition.slug.in_(["list-devices", "get-device"]))
+            )
+            .scalars()
+            .all()
+        }
+
+    list_devices_model_schema = endpoints["list-devices"].response_schema["items"]["properties"]["model"]
+    get_device_model_schema = endpoints["get-device"].response_schema["properties"]["model"]
+    list_devices_id_schema = endpoints["list-devices"].response_schema["items"]["properties"]["deviceId"]
+    get_device_id_schema = endpoints["get-device"].response_schema["properties"]["deviceId"]
+
+    assert list_devices_model_schema["enum"] == DEVICE_MODELS
+    assert get_device_model_schema["enum"] == DEVICE_MODELS
+    assert list_devices_id_schema["format"] == "uuid"
+    assert get_device_id_schema["format"] == "uuid"
+    assert list_devices_id_schema["x-mock"]["type"] == "id"
+    assert get_device_id_schema["x-mock"]["type"] == "id"
 
 
 def test_runtime_dispatch_ignores_disabled_endpoints(empty_db):

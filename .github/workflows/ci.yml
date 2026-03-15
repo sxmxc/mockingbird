@@ -1,46 +1,89 @@
 name: CI
 
 on:
-  push:
-    branches: ["main"]
   pull_request:
     branches: ["main"]
+  push:
+    branches: ["main"]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   backend:
+    name: Backend Tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: 3.11
-      - name: Install dependencies
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            apps/api/requirements.txt
+            apps/api/requirements-dev.txt
+      - name: Install backend dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r apps/api/requirements.txt
+          pip install -r requirements.txt -r requirements-dev.txt
       - name: Run backend tests
-        run: |
-          cd apps/api
-          pytest
+        run: python -m pytest
 
   frontend:
+    name: Frontend Checks
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/admin-web
     steps:
       - uses: actions/checkout@v4
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-      - name: Install dependencies
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/admin-web/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Run frontend lint
+        run: npm run lint
+      - name: Run frontend tests
+        run: npm run test
+      - name: Build frontend
+        run: npm run build
+
+  docker-smoke:
+    name: Docker Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start Docker Compose stack
+        run: docker compose up -d --build
+      - name: Wait for services
         run: |
-          cd apps/admin-web
-          npm ci
-      - name: Run typecheck
-        run: |
-          cd apps/admin-web
-          npm run typecheck
-      - name: Build
-        run: |
-          cd apps/admin-web
-          npm run build
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/openapi.json >/dev/null && curl -fsS http://127.0.0.1:3000 >/dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Services did not become ready in time." >&2
+          exit 1
+      - name: Show compose status
+        if: always()
+        run: docker compose ps
+      - name: Capture compose logs
+        if: failure()
+        run: docker compose logs --tail=200
+      - name: Shut down Docker Compose stack
+        if: always()
+        run: docker compose down --volumes

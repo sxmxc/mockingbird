@@ -33,6 +33,9 @@ Provide a Docker-first platform to define and serve configurable mock APIs with 
 - The public sample-payload modal now lets long JSON strings wrap inside the modal body instead of creating a second inner scrollbar inside the payload `<pre>`.
 - Seed data loads a 15-endpoint catalog, and `make seed` / `make test` work in Docker.
 - The frontend now runs on Vue + Vuetify, with a dedicated login flow, protected catalog/settings routes, a dedicated schema studio route, light/dark theme toggle, catalog search/filtering, and a Vuetify-first drag-and-drop builder surface.
+- GitHub Actions now runs backend tests, frontend lint/test/build, and a Docker Compose smoke test on `main` pushes and pull requests, while a separate image workflow validates runtime images on PRs and publishes multi-arch `linux/amd64` + `linux/arm64` images to GHCR on `main` and `v*` tags.
+- The repo now includes a `deploy/docker-compose.ghcr.yml` example plus `deploy/.env.ghcr.example` so teams can run the stack from published GHCR images without cloning the full source tree.
+- The seeded device catalog now defaults `deviceId` to UUID-style IDs and constrains `model` to the curated device-model enum list in both the list/detail device schemas.
 - The sign-in screen now uses a simpler single-column studio welcome above the form, with more human-facing copy and less implementation-heavy onboarding text.
 - The schema studio now uses draggable Vuetify chips for palette actions, a left-rail inspector, a dedicated preview rail, response preview regeneration, and a separate public-route preview page.
 - Response nodes now support static, true-random, and mocking-random generation modes, and the seeded quote endpoints use the mocking mode to showcase the product voice.
@@ -43,6 +46,8 @@ Provide a Docker-first platform to define and serve configurable mock APIs with 
 - Frontend coverage now includes schema-tree utility tests plus a Vue component smoke test for the Vuetify catalog search flow under Vitest.
 - Frontend startup now refreshes the Dockerized `node_modules` volume automatically when `package-lock.json` changes, which reduces bind-mount drift and local permissions headaches.
 - The repo now includes a project-level Vuetify MCP config and frontend scripts for running the local Vuetify MCP server when needed.
+- The Dockerfiles now expose separate `dev` and `runtime` targets so local Compose can stay hot-reload friendly while CI/CD publishes production-ready API and static-admin images.
+- The API runtime version now comes from `APP_VERSION`, which lets release images stamp OpenAPI metadata with the published version, and the admin runtime image serves its built SPA through Nginx with a configurable `API_UPSTREAM`.
 
 ## Known Risks
 - Live OpenAPI generation may become slow if not cached.
@@ -53,6 +58,7 @@ Provide a Docker-first platform to define and serve configurable mock APIs with 
 - Remember-me mode still persists Basic Auth credentials client-side because the backend only exposes Basic Auth for v1; revisit once token/session auth exists.
 - Request schema authoring still targets JSON request bodies only; query/path parameter modeling is a follow-up.
 - Vitest/jsdom still prints repeated `Could not parse CSS stylesheet` warnings when rendering Vuetify-heavy components, even though the frontend tests pass.
+- Local arm64 validation works through a temporary buildx/QEMU builder, but it is meaningfully slower than native amd64 builds because the admin runtime image has to cross-compile the full Vite bundle.
 
 ## Notes for Next Agent
 - Keep tasks updated in `TASKS.md` as progress is made.
@@ -70,3 +76,5 @@ Provide a Docker-first platform to define and serve configurable mock APIs with 
 - Alembic lives under `apps/api/migrations/`, and both `start.sh` and `scripts/seed.sh` run the migration bootstrap before serving or seeding.
 - Active admin sessions now live in `sessionStorage`, while the explicit remember-me path additionally copies credentials to `localStorage` so page refreshes stay smooth without always making credentials durable.
 - Vuetify MCP is configured at the repo root via `.mcp.json`, and the frontend package exposes `npm run mcp:vuetify` plus `npm run mcp:vuetify:http` for local MCP usage.
+- Official container images now follow a tag-driven release scheme: `vX.Y.Z` tags publish semver image tags plus `latest`, while default-branch builds publish branch/`edge`/`sha-*` tags alongside uploaded image metadata artifacts and provenance attestations.
+- The standalone deployment example targets `ghcr.io/sxmxc/cuddly-octo-memory-api` and `ghcr.io/sxmxc/cuddly-octo-memory-admin-web`, defaults to `IMAGE_TAG=edge`, and should be pinned to a numbered release tag for production use.

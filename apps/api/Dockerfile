@@ -1,13 +1,26 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_ROOT_USER_ACTION=ignore
+
 WORKDIR /app
 
-# Install dependencies
 COPY requirements.txt requirements-dev.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+FROM base AS runtime
+
+ARG APP_VERSION=0.1.0
+ENV APP_VERSION=${APP_VERSION}
+COPY . .
+
+EXPOSE 8000
+CMD ["sh", "./start.prod.sh"]
+
+FROM base AS dev
+
+RUN pip install --no-cache-dir -r requirements-dev.txt
 
 COPY . .
 

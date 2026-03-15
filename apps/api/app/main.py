@@ -9,7 +9,7 @@ from app.openapi import get_openapi
 
 settings = Settings()
 
-app = FastAPI(title="Mockingbird", version="0.1.0")
+app = FastAPI(title="Mockingbird", version=settings.app_version)
 
 static_dir = Path(__file__).resolve().parents[1] / "static"
 static_dir.mkdir(parents=True, exist_ok=True)

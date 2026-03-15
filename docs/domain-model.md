@@ -40,6 +40,8 @@ Random generation respects standard JSON Schema keywords where useful:
 - `minLength` / `maxLength`
 - `minItems` / `maxItems`
 
+For string identifiers, `format: uuid` is treated as the semantic `id` value type during normalization and sample generation.
+
 Mode behavior:
 - `generate`: type-correct true random values.
 - `mocking`: type-correct values with a more playful Mockingbird tone, such as snarkier text, themed emails, cheekier names, or longer quote/message copy.

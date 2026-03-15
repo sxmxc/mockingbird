@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     api_host: str = Field("0.0.0.0", env="API_HOST")
     api_port: int = Field(8000, env="API_PORT")
     log_level: str = Field("info", env="API_LOG_LEVEL")
+    app_version: str = Field("0.1.0", env="APP_VERSION")
 
     postgres_user: str = Field("mockadmin", env="POSTGRES_USER")
     postgres_password: str = Field("mockpassword", env="POSTGRES_PASSWORD")

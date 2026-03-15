@@ -10,6 +10,50 @@ from app.schemas import EndpointCreate
 from app.services.schema_contract import build_fixed_schema_from_example, normalize_schema_for_builder
 
 
+DEVICE_MODELS = [
+    "PacketStorm PX-4200",
+    "TurboCore TX-900",
+    "QuantumBridge QB-88",
+    "SignalForge SF-1200",
+    "HyperNode HN-640",
+    "DataPulse DP-3000",
+    "VectorGrid VG-72",
+    "CoreMatrix CM-810",
+    "PhotonLink PL-404",
+    "MegaFabric MF-1600",
+    "NanoSwitch NS-88X",
+    "OmniRouter OR-550",
+    "PulseArray PA-2048",
+    "TurboLatch TL-900X",
+    "QuantumPort QP-77",
+    "HyperDrive HD-990",
+    "FluxRouter FR-2200",
+    "CorePulse CP-480",
+    "SignalMesh SM-300",
+    "VectorNode VN-1280",
+    "DataStorm DS-660",
+    "PhotonCore PC-512",
+    "MegaLink ML-808",
+    "TurboArray TA-1500",
+    "QuantumGrid QG-909",
+    "FluxMatrix FM-420",
+    "HyperSwitch HS-77",
+    "PulseCore PX-120",
+    "NanoMatrix NM-808",
+    "VectorPulse VP-3000",
+    "CoreFlux CF-66",
+    "SignalCore SC-1100",
+    "PhotonMesh PM-204",
+    "MegaNode MN-950",
+    "QuantumLatch QL-72",
+    "TurboFabric TF-1000",
+    "FluxArray FA-360",
+    "HyperGrid HG-808",
+    "DataMatrix DM-4200",
+    "CoreBridge CB-512",
+]
+
+
 def request_schema(schema: dict) -> dict:
     return normalize_schema_for_builder(schema, property_name="root", include_mock=False)
 
@@ -189,8 +233,8 @@ def seed():
                     "items": {
                         "type": "object",
                         "properties": {
-                            "deviceId": {"type": "string", "x-mock": {"generator": "slug"}},
-                            "model": {"type": "string", "x-mock": {"generator": "text"}},
+                            "deviceId": {"type": "string", "format": "uuid"},
+                            "model": {"type": "string", "enum": DEVICE_MODELS.copy()},
                             "status": {
                                 "type": "string",
                                 "enum": ["online", "idle", "calibrating", "vibing"],
@@ -214,8 +258,8 @@ def seed():
                 {
                     "type": "object",
                     "properties": {
-                        "deviceId": {"type": "string", "x-mock": {"generator": "slug"}},
-                        "model": {"type": "string", "x-mock": {"generator": "text"}},
+                        "deviceId": {"type": "string", "format": "uuid"},
+                        "model": {"type": "string", "enum": DEVICE_MODELS.copy()},
                         "status": {"type": "string", "enum": ["online", "idle", "maintenance"]},
                         "lastSeen": {"type": "string", "format": "date-time"},
                     },

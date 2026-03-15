@@ -469,7 +469,6 @@ LANDING_TEMPLATE = """
       }
 
       .hero-copy-inner {
-        width: min(1720px, calc(100% - 24px));
         padding: clamp(18px, 2.1vw, 26px) clamp(22px, 2.6vw, 30px);
         margin: 0;
         border-radius: 30px;

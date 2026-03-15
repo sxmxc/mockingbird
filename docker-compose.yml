@@ -22,6 +22,7 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
+      target: dev
     env_file:
       - .env
     ports:
@@ -37,6 +38,7 @@ services:
     build:
       context: ./apps/admin-web
       dockerfile: Dockerfile
+      target: dev
     env_file:
       - .env
     ports:
@@ -53,4 +55,4 @@ volumes:
   admin_web_npm_cache:
   admin_web_node_modules:
   pgdata:
-    name: cuddly_octo_memory_pgdata
+    name: mockingbird_api_pgdata

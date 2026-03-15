@@ -16,10 +16,12 @@ Mockingbird is built as a **monorepo** with a public API surface and a private a
 - **Frontend (`apps/admin-web/`)**
   - Vue + Vite + Vuetify admin dashboard.
   - Provides endpoint catalog management, a dedicated schema studio, preview tools, and auth-protected admin workflows.
+  - Local Docker development uses a Vite-based `dev` image target, while release builds package the compiled SPA behind Nginx in a separate `runtime` target.
 
 - **Orchestration**
   - Uses Docker Compose for local and QA profiles.
   - Services include: Postgres, backend, frontend.
+  - GitHub Actions additionally validates runtime images and publishes multi-arch GHCR artifacts for CI/CD.
 
 ## Data flow
 1. Admin user creates/edits endpoint definitions via the UI.

@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mockadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-mockapi}
+      POSTGRES_INITDB_ARGS: --auth-local=scram-sha-256 --auth-host=scram-sha-256
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "PGPASSWORD=${POSTGRES_PASSWORD:-change-me} pg_isready -h localhost -U ${POSTGRES_USER:-mockadmin} -d ${POSTGRES_DB:-mockapi}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    image: ghcr.io/sxmxc/cuddly-octo-memory-api:${IMAGE_TAG:-edge}
+    restart: unless-stopped
+    pull_policy: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mockadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-mockapi}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me}
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      API_LOG_LEVEL: ${API_LOG_LEVEL:-info}
+      ENABLE_OPENAPI: ${ENABLE_OPENAPI:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${API_PUBLISHED_PORT:-8000}:8000"
+
+  admin-web:
+    image: ghcr.io/sxmxc/cuddly-octo-memory-admin-web:${IMAGE_TAG:-edge}
+    restart: unless-stopped
+    pull_policy: always
+    environment:
+      API_UPSTREAM: http://api:8000
+    depends_on:
+      - api
+    ports:
+      - "${ADMIN_WEB_PUBLISHED_PORT:-3000}:80"
+
+volumes:
+  pgdata:
+    name: ${POSTGRES_VOLUME_NAME:-mockingbird_api_pgdata}

@@ -59,3 +59,5 @@ This file tracks the work needed to bootstrap and evolve the project.
 - [x] Simplify the public quick reference styling so it stays closer to stock Bulma
 - [x] Add a dedicated long-text value type for schema-studio string fields
 - [x] Simplify the admin sign-in page with friendlier copy and a single-column intro/form flow
+- [x] Stabilize GitHub Actions CI and add multi-arch image publishing for CI/CD
+- [x] Add a standalone GHCR-backed Docker Compose example for image-only deployments

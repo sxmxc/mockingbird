@@ -28,6 +28,7 @@ make up
 ## Bootstrap notes
 
 - `make up` is safe to run from a bind-mounted checkout even if `start.sh` does not have the executable bit set on the host.
+- Local Compose explicitly builds the Dockerfiles' `dev` targets so the API keeps `uvicorn --reload` and the admin app keeps the Vite dev server for fast iteration.
 - API startup now runs `alembic upgrade head` before launching Uvicorn, so schema changes and legacy contract migrations are applied automatically.
 - The frontend keeps `node_modules` in a Docker volume so the bind-mounted source tree does not hide Vite and other installed dependencies.
 - The frontend startup script now hashes `package-lock.json` and refreshes the Dockerized dependency volume automatically when the lockfile changes, which helps keep image/runtime dependencies isolated from host `node_modules`.
@@ -51,6 +52,13 @@ docker compose run --rm admin-web npm run lint
 docker compose run --rm admin-web npm run test
 docker compose run --rm admin-web npm run build
 ```
+
+## Runtime images
+
+- The production-ready image targets are `runtime`, not the `dev` targets used by local Compose.
+- The API runtime image reads `APP_VERSION` so published OpenAPI metadata can match the release tag.
+- The admin runtime image serves the built SPA through Nginx and proxies `/api` to `API_UPSTREAM` (default `http://api:8000`).
+- The GitHub image workflow validates `runtime` builds on pull requests and publishes multi-arch images on `main` and `v*` tags.
 
 ## Local development (backend only)
 
