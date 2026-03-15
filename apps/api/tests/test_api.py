@@ -278,6 +278,40 @@ def test_superusers_can_manage_dashboard_users(empty_db):
     assert delete_response.status_code == 204
 
 
+def test_deleting_dashboard_user_removes_historical_sessions(empty_db):
+    client = TestClient(app)
+    admin_headers = _login_headers(client)
+
+    create_response = client.post(
+        "/api/admin/users",
+        json={
+            "username": "audited-user",
+            "password": "audited-user-password-123",
+            "is_superuser": False,
+            "must_change_password": False,
+        },
+        headers=admin_headers,
+    )
+    assert create_response.status_code == 201
+    created_user = create_response.json()
+
+    user_headers = _login_headers(
+        client,
+        username="audited-user",
+        candidate_passwords=("audited-user-password-123",),
+    )
+
+    logout_response = client.post("/api/admin/auth/logout", headers=user_headers)
+    assert logout_response.status_code == 204
+
+    delete_response = client.delete(f"/api/admin/users/{created_user['id']}", headers=admin_headers)
+    assert delete_response.status_code == 204
+
+    list_response = client.get("/api/admin/users", headers=admin_headers)
+    assert list_response.status_code == 200
+    assert all(user["id"] != created_user["id"] for user in list_response.json())
+
+
 def test_private_admin_paths_cannot_be_created_as_public_mocks(empty_db):
     client = TestClient(app)
     headers = _login_headers(client)

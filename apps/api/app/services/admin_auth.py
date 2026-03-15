@@ -246,6 +246,11 @@ def update_admin_user(
 
 
 def delete_admin_user(session: Session, user: AdminUser) -> None:
+    statement = select(AdminSession).where(AdminSession.user_id == user.id)
+    admin_sessions = list(session.execute(statement).scalars())
+    for admin_session in admin_sessions:
+        session.delete(admin_session)
+
     session.delete(user)
     session.commit()
 

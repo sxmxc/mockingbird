@@ -245,7 +245,6 @@ def delete_dashboard_user(
             detail="Mockingbird must keep at least one active superuser.",
         )
 
-    revoke_user_sessions(session, user.id)
     delete_admin_user(session, user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

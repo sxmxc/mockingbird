@@ -23,6 +23,7 @@ Provide a Docker-first platform to define and serve configurable mock APIs with 
 ## Current Status Snapshot
 - Docker Compose starts a working Postgres, FastAPI API, and Vite admin app with `make up`.
 - The backend exposes session-authenticated admin routes, DB-backed dashboard-user management, forced password rotation for bootstrap/reset credentials, DB-driven runtime dispatch, live OpenAPI generation, and an authenticated response preview endpoint.
+- The admin account deletion path now removes all historical `adminsession` rows before deleting the user, so revoked or expired logins cannot strand dashboard accounts behind Postgres foreign-key errors.
 - The backend now reserves `/api/admin` plus other system-owned public paths like `/api` and `/api/reference.json`, so DB-defined mock endpoints cannot trespass into private or framework-owned route space.
 - The backend now manages SQLModel sessions through a yielded request-scoped dependency plus a shared context manager, which prevents leaked connections from exhausting the Postgres pool under sustained traffic.
 - The backend now also exposes a branded Mockingbird landing page at `/` and `/api`, plus a live `/api/reference.json` feed backed directly by the current endpoint catalog.
