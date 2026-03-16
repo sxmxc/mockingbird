@@ -631,17 +631,9 @@ export function applyPathParameter(
       return node;
     }
 
-    const rebuilt = createNode("string", scope, {
-      id: node.id,
-      name: node.name,
-      required: node.required,
-      description: node.description,
-      mode: "generate",
-    });
-
     return {
-      ...rebuilt,
-      generator: defaultGeneratorForType("string", node.name, "") ?? rebuilt.generator,
+      ...node,
+      mode: "generate",
       parameterSource: trimmedParameter,
     };
   });
@@ -903,7 +895,7 @@ export function schemaToTree(schema: JsonObject | null | undefined, scope: Build
     const format = typeof rawSchema.format === "string" ? rawSchema.format : "";
     const generator = scope === "response"
       ? parameterSource
-        ? defaultGeneratorForType("string", name, "")
+        ? defaultGeneratorForType(type, name, format)
         : resolveGenerator(
             type,
             name,

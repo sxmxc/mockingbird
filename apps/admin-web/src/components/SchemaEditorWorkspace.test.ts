@@ -271,6 +271,61 @@ describe("SchemaEditorWorkspace", () => {
     });
   });
 
+  it("preserves numeric field constraints when linking a route parameter through the value lane", async () => {
+    const { emitted } = await renderWorkspace({
+      pathParameters: ["deviceId"],
+      schema: {
+        type: "object",
+        properties: {
+          deviceId: {
+            type: "integer",
+            minimum: 10,
+            maximum: 99,
+          },
+        },
+        required: [],
+        "x-builder": {
+          order: ["deviceId"],
+        },
+      },
+      scope: "response",
+    });
+
+    const deviceIdNode = screen.getByText("deviceId").closest("[data-node-id]");
+    expect(deviceIdNode).not.toBeNull();
+
+    const valueSlot = document.querySelector(
+      `[data-drop-zone="value"][data-drop-target="${deviceIdNode?.getAttribute("data-node-id")}"]`,
+    );
+    const parameterPill = document.querySelector('[data-path-parameter="deviceId"]');
+
+    expect(valueSlot).not.toBeNull();
+    expect(parameterPill).not.toBeNull();
+
+    await fireEvent.dragStart(parameterPill as Element);
+    await fireEvent.drop(valueSlot as Element);
+
+    const schemaUpdates = emitted()["update:schema"] as Array<[JsonObject]> | undefined;
+    expect(schemaUpdates?.at(-1)?.[0]).toMatchObject({
+      properties: {
+        deviceId: {
+          type: "integer",
+          minimum: 10,
+          maximum: 99,
+          "x-mock": {
+            mode: "generate",
+            type: "path_parameter",
+            generator: "path_parameter",
+            parameter: "deviceId",
+            options: {
+              parameter: "deviceId",
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("assigns value types and behaviors through the scalar value lane", async () => {
     const { emitted } = await renderWorkspace({
       schema: {

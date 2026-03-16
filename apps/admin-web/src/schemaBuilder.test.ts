@@ -127,4 +127,55 @@ describe("schemaBuilder utilities", () => {
     const roundTripped = schemaToTree(schema, "response");
     expect(roundTripped.children[0]?.parameterSource).toBe("userId");
   });
+
+  it("preserves scalar types and constraints when linking route path parameters", () => {
+    let tree = createRootNode("response");
+    tree = addNodeToContainer(tree, tree.id, "number", "response");
+    tree = updateNode(tree, tree.children[0].id, (node) => ({
+      ...node,
+      name: "deviceId",
+      minimum: 10.5,
+      maximum: 99.5,
+      mode: "fixed",
+      fixedValue: 42.25,
+    }));
+    tree = applyPathParameter(tree, tree.children[0].id, "deviceId", "response");
+
+    expect(tree.children[0]).toMatchObject({
+      type: "number",
+      minimum: 10.5,
+      maximum: 99.5,
+      mode: "generate",
+      parameterSource: "deviceId",
+    });
+
+    const schema = treeToSchema(tree, "response");
+    expect(schema).toMatchObject({
+      properties: {
+        deviceId: {
+          type: "number",
+          minimum: 10.5,
+          maximum: 99.5,
+          "x-mock": {
+            mode: "generate",
+            type: "path_parameter",
+            generator: "path_parameter",
+            parameter: "deviceId",
+            options: {
+              parameter: "deviceId",
+            },
+          },
+        },
+      },
+    });
+
+    const roundTripped = schemaToTree(schema, "response");
+    expect(roundTripped.children[0]).toMatchObject({
+      type: "number",
+      minimum: 10.5,
+      maximum: 99.5,
+      parameterSource: "deviceId",
+      generator: "number",
+    });
+  });
 });

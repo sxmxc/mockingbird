@@ -87,3 +87,4 @@ This file tracks the work needed to bootstrap and evolve the project.
 - [x] Restore the public hero warning and sharpen mocking-mode copy so the landing page and generated text feel more like Mockingbird
 - [x] Add syntax-highlighted, scrollable JSON panes with inline copy actions to the schema-studio live preview rail
 - [x] Add a real local production-like Compose mode so a checked-out repo can swap from dev targets to runtime targets
+- [x] Preserve scalar response field types and constraints when linking route-value path parameters in the schema studio

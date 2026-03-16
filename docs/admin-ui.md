@@ -43,6 +43,7 @@ The frontend communicates with the backend via the admin API under `/api/admin`.
 - The desktop schema studio should bias space toward the canvas rather than giving the preview rail equal visual weight, so authoring remains the dominant task on wide screens.
 - The builder palette should separate structure from scalar semantics: node pills target the key rail, while response-only behavior and value-type pills target the scalar value lane.
 - Route placeholders should surface in the response editor as draggable route-value pills, so scalar response fields can echo live URL segments without pretending those values belong to the request JSON body.
+- Linking a route-value pill should preserve the selected scalar field's existing type and JSON Schema constraints, so the saved response contract and generated OpenAPI stay aligned while runtime previews coerce the incoming path segment.
 - Root-shape changes should live on the selected node's inspector controls rather than being duplicated in the builder palette.
 - Duplicating an endpoint should open the create flow with a prefilled copy, auto-adjust the name/path, and default the duplicate to disabled so the user can review it before publishing; the backend regenerates the internal slug from the copied name.
 - The schema studio is builder-first: users drag Vuetify chip pills into a tree workspace, edit node settings in the left inspector rail, and use import/copy actions only as advanced helpers.
