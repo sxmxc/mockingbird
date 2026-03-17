@@ -425,6 +425,10 @@ def _apply_endpoint_import_plan(session: Session, actions: list[_EndpointImportP
                 used_slugs=used_slugs,
             )
             session.add(EndpointDefinition(**payload))
+            # Flush each created route immediately so Postgres does not batch them
+            # through insertmanyvalues, which reintroduces a broken enum cast for
+            # the legacy varchar-backed auth_mode column.
+            session.flush()
             continue
 
         if action.endpoint is None:
