@@ -32,7 +32,7 @@ type MutableNode = SchemaBuilderNode;
 export type GeneratorOption = { label: string; types: BuilderNodeType[]; value: string };
 type LinkedPathParameterDefinition = Pick<
   RequestParameterDefinition,
-  "enumValues" | "format" | "maxLength" | "maximum" | "minLength" | "minimum" | "name" | "type"
+  "enumValues" | "format" | "hasExplicitSchema" | "maxLength" | "maximum" | "minLength" | "minimum" | "name" | "type"
 >;
 
 const ROOT_ID = "builder-root";
@@ -412,6 +412,7 @@ function normalizeLinkedPathParameter(
   return {
     enumValues: parameter.enumValues ?? [],
     format: parameter.format ?? "",
+    hasExplicitSchema: parameter.hasExplicitSchema ?? true,
     maxLength: parameter.maxLength ?? null,
     maximum: parameter.maximum ?? null,
     minLength: parameter.minLength ?? null,
@@ -654,7 +655,7 @@ export function applyPathParameter(
   parameter: string | LinkedPathParameterDefinition,
   scope: BuilderScope,
 ): SchemaBuilderNode {
-  const hasLinkedParameterShape = typeof parameter !== "string";
+  const hasLinkedParameterShape = typeof parameter !== "string" && parameter.hasExplicitSchema !== false;
   const linkedParameter = normalizeLinkedPathParameter(parameter);
   const trimmedParameter = linkedParameter.name;
   if (scope !== "response" || !trimmedParameter) {

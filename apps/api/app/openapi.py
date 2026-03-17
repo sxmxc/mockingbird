@@ -29,7 +29,7 @@ def _parameter_from_schema(
     required: bool,
     schema: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    sanitized_schema = _schema_or_empty(schema)
+    sanitized_schema = sanitize_public_schema(schema or {"type": "string"})
     parameter = {
         "in": location,
         "name": name,

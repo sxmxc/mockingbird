@@ -52,6 +52,7 @@ Mode behavior:
 - The root object is the JSON Schema used for the request body on `POST` / `PUT` / `PATCH` routes.
 - Optional `request_schema["x-request"]["path"]` and `request_schema["x-request"]["query"]` sections store flat object schemas for path and query parameters.
 - Path parameter names are derived from the saved route path (for example `/api/devices/{deviceId}`) and are automatically kept required/in-order to match the live route template.
+- If a route placeholder exists before explicit path-parameter metadata is authored, OpenAPI still publishes that parameter as a required `string` path input by default.
 - Query parameters use the same object-schema shape, with `required` and `x-builder.order` preserving UI state.
 - Parameter authoring is intentionally limited to flat scalar/enum fields today; nested parameter objects, arrays, and advanced serialization styles are not modeled yet.
 

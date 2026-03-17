@@ -223,12 +223,14 @@ const responsePathParameters = computed<RequestParameterDefinition[]>(() => {
   return (props.pathParameters ?? []).reduce<RequestParameterDefinition[]>((accumulator, parameter, index) => {
     const normalized = typeof parameter === "string"
       ? createRequestParameterDefinition("path", {
+          hasExplicitSchema: false,
           id: `path-${parameter}-${index}`,
           name: parameter,
           required: true,
         })
       : {
           ...parameter,
+          hasExplicitSchema: parameter.hasExplicitSchema ?? true,
           id: parameter.id || `path-${parameter.name}-${index}`,
           required: true,
         };

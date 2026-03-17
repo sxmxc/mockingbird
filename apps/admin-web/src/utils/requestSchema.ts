@@ -8,6 +8,7 @@ export interface RequestParameterDefinition {
   description: string;
   enumValues: string[];
   format: string;
+  hasExplicitSchema?: boolean;
   id: string;
   maxLength: number | null;
   maximum: number | null;
@@ -136,6 +137,7 @@ export function createRequestParameterDefinition(
     description: overrides.description ?? "",
     enumValues: overrides.enumValues ?? (overrides.type === "enum" ? ["sample"] : []),
     format: overrides.format ?? "",
+    hasExplicitSchema: overrides.hasExplicitSchema ?? true,
     id: overrides.id ?? nextParameterId(location),
     maxLength: overrides.maxLength ?? null,
     maximum: overrides.maximum ?? null,
