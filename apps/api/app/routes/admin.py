@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlmodel import Session, select
 
 from app.crud import (
@@ -39,6 +39,7 @@ from app.schemas import (
 )
 from app.services.admin_auth import (
     AdminContext,
+    AdminLoginThrottleError,
     authenticate_admin_user,
     build_admin_user_read,
     count_active_superusers,
@@ -105,6 +106,16 @@ def _raise_user_input_error(error: ValueError) -> None:
     detail = str(error)
     status_code = status.HTTP_409_CONFLICT if "already in use" in detail.lower() else status.HTTP_400_BAD_REQUEST
     raise HTTPException(status_code=status_code, detail=detail)
+
+
+def _client_ip_from_request(request: Request) -> str | None:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        first_hop = forwarded_for.split(",")[0].strip()
+        if first_hop:
+            return first_hop
+
+    return request.client.host if request.client else None
 
 
 def _normalize_endpoint_fields(
@@ -471,9 +482,23 @@ def _apply_endpoint_import_plan(session: Session, actions: list[_EndpointImportP
 @router.post("/auth/login", response_model=AdminLoginResponse)
 def login_admin(
     payload: AdminLoginRequest,
+    request: Request,
     session: Session = Depends(get_session),
 ) -> AdminLoginResponse:
-    user = authenticate_admin_user(session, payload.username, payload.password)
+    try:
+        user = authenticate_admin_user(
+            session,
+            payload.username,
+            payload.password,
+            client_ip=_client_ip_from_request(request),
+        )
+    except AdminLoginThrottleError as error:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Try again later.",
+            headers={"Retry-After": str(error.retry_after_seconds)},
+        ) from error
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

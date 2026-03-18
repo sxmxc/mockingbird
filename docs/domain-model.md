@@ -78,6 +78,9 @@ Fields:
 - `is_active`: whether the account can sign in
 - `role`: `viewer`, `editor`, or `superuser`
 - `is_superuser`: compatibility flag now derived from the role model in practice
+- `failed_login_attempts`: rolling failed-login counter used for brute-force protection
+- `last_failed_login_at`: timestamp of the last failed login attempt
+- `locked_until`: temporary lockout deadline after too many failed logins
 - `must_change_password`: whether the account is blocked on password rotation
 - `last_login_at`, `password_changed_at`: security audit timestamps
 - `created_at`, `updated_at`: audit timestamps
@@ -86,6 +89,7 @@ Role behavior:
 - `viewer`: can browse the route catalog and use preview tools
 - `editor`: viewer permissions plus route/settings/schema mutations and route import
 - `superuser`: editor permissions plus admin-user management
+- Repeated failed sign-ins can temporarily lock an account, and the API also applies a client-IP throttle before password verification continues.
 
 Related admin endpoints:
 - `GET /api/admin/account/me`: returns the signed-in admin user's profile details

@@ -4,17 +4,49 @@ import asyncio
 import json
 import random
 import re
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, Request, Response
-from sqlmodel import Session
+from fastapi import APIRouter, Request, Response
+from starlette.concurrency import run_in_threadpool
 
 from app.crud import list_endpoints
-from app.db import get_session
+from app.db import session_scope
 from app.services.mock_generation import preview_from_schema
 
 router = APIRouter()
+PATH_PARAMETER_PATTERN = re.compile(r"\{([^/}]+)\}")
+
+
+@dataclass(slots=True)
+class MatchedEndpoint:
+    id: int
+    method: str
+    path: str
+    response_schema: Any
+    seed_key: str | None
+    success_status_code: int
+    latency_min_ms: int
+    latency_max_ms: int
+    error_rate: float
+
+
+def _path_regex(pattern: str) -> tuple[re.Pattern[str], list[str]]:
+    parameter_names: list[str] = []
+    cursor = 0
+    regex_parts = ["^"]
+
+    for match in PATH_PARAMETER_PATTERN.finditer(pattern):
+        start, end = match.span()
+        regex_parts.append(re.escape(pattern[cursor:start]))
+        regex_parts.append(r"([^/]+)")
+        parameter_names.append(match.group(1))
+        cursor = end
+
+    regex_parts.append(re.escape(pattern[cursor:]))
+    regex_parts.append("$")
+    return re.compile("".join(regex_parts)), parameter_names
 
 
 def _match_path_parameters(request_path: str, pattern: str) -> dict[str, str] | None:
@@ -22,10 +54,8 @@ def _match_path_parameters(request_path: str, pattern: str) -> dict[str, str] | 
     request_path = request_path.rstrip("/") or "/"
     pattern = pattern.rstrip("/") or "/"
 
-    parameter_names = re.findall(r"\{([^/}]+)\}", pattern)
-    regex = re.sub(r"\{[^/]+\}", r"([^/]+)", pattern)
-    regex = f"^{regex}$"
-    match = re.match(regex, request_path)
+    regex, parameter_names = _path_regex(pattern)
+    match = regex.match(request_path)
     if not match:
         return None
 
@@ -35,8 +65,40 @@ def _match_path_parameters(request_path: str, pattern: str) -> dict[str, str] | 
     }
 
 
+def _find_matching_endpoint(request_path: str, method: str) -> tuple[MatchedEndpoint | None, dict[str, str]]:
+    with session_scope() as session:
+        endpoints = list_endpoints(session, limit=1000)
+
+    for endpoint in endpoints:
+        if not endpoint.enabled:
+            continue
+        if endpoint.method.upper() != method:
+            continue
+
+        path_parameters = _match_path_parameters(request_path, endpoint.path)
+        if path_parameters is None:
+            continue
+
+        return (
+            MatchedEndpoint(
+                id=int(endpoint.id or 0),
+                method=endpoint.method,
+                path=endpoint.path,
+                response_schema=endpoint.response_schema,
+                seed_key=endpoint.seed_key,
+                success_status_code=endpoint.success_status_code,
+                latency_min_ms=endpoint.latency_min_ms,
+                latency_max_ms=endpoint.latency_max_ms,
+                error_rate=endpoint.error_rate,
+            ),
+            path_parameters,
+        )
+
+    return None, {}
+
+
 def _pick_response(
-    endpoint: Any,
+    endpoint: MatchedEndpoint,
     path_parameters: dict[str, str],
     query_parameters: dict[str, str],
     request_body: Any,
@@ -63,25 +125,11 @@ async def _parse_json_request_body(request: Request) -> Any:
 
 
 @router.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
-async def catchall(full_path: str, request: Request, session: Session = Depends(get_session)) -> Response:
+async def catchall(full_path: str, request: Request) -> Response:
     request_path = request.url.path
     method = request.method.upper()
 
-    endpoints = list_endpoints(session, limit=1000)
-    match = None
-    matched_path_parameters: dict[str, str] = {}
-    for endpoint in endpoints:
-        if not endpoint.enabled:
-            continue
-        if endpoint.method.upper() != method:
-            continue
-        path_parameters = _match_path_parameters(request_path, endpoint.path)
-        if path_parameters is None:
-            continue
-
-        match = endpoint
-        matched_path_parameters = path_parameters
-        break
+    match, matched_path_parameters = await run_in_threadpool(_find_matching_endpoint, request_path, method)
 
     if not match:
         return Response(status_code=404, content=json.dumps({"error": "Not found"}), media_type="application/json")
@@ -101,7 +149,7 @@ async def catchall(full_path: str, request: Request, session: Session = Depends(
 
     request_body = await _parse_json_request_body(request)
     query_parameters = {key: value for key, value in request.query_params.items()}
-    body = _pick_response(match, matched_path_parameters, query_parameters, request_body)
+    body = await run_in_threadpool(_pick_response, match, matched_path_parameters, query_parameters, request_body)
     return Response(
         status_code=match.success_status_code,
         content=json.dumps(body, default=str),

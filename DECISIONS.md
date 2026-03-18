@@ -250,5 +250,11 @@
 - **Users workflow**: Treat the user directory as the primary `Users` screen, with one clear `New user` action that opens a dialog, because persistent side-by-side create forms made the page feel heavier and distracted from the main administration task.
 - **Theme discipline**: Any custom shell/page styling should derive contrast from Vuetify theme tokens instead of hard-coded light-on-dark values, so light and dark mode stay equally legible during future UI polish passes.
 
+## 2026-03-18: Public/admin security hardening baseline
+- **Landing-page bootstrap**: Never inline live catalog JSON into executable script assignments; embed reference payloads through an escaped `application/json` script block and parse them at runtime so stored endpoint content cannot break out into executable page script.
+- **Public routing**: Treat saved public paths as literal text plus explicit `{param}` placeholders, escape static segments before building match regexes, and keep the async catchall's sync DB/sample-generation work off the event loop so runtime traffic does not stall on synchronous SQLModel access.
+- **Admin auth**: Add baseline brute-force protection through per-account lockouts, per-IP throttling, and audit logging of failed/blocked/successful login attempts, while keeping `/api/admin/account/me` partial updates truly partial instead of requiring `username` on every profile edit.
+- **Headers**: Serve baseline browser hardening headers from both the FastAPI app and the admin runtime/dev shells, with CSP tuned separately for the public landing page, JSON API responses, and the Vite dev experience.
+
 
 *> Future decisions should append a dated entry with context and rationale.*

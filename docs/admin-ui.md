@@ -4,6 +4,7 @@ The admin UI is a Vue + Vite + Vuetify application that lets users manage mock e
 
 ## Key screens
 - **Login**: Dedicated sign-in screen for admin users, with concise route-focused copy, explicit remember-me behavior, and bootstrap-password guidance for fresh installs.
+- **Login hardening**: The admin login route now rate-limits by client IP, temporarily locks individual accounts after repeated failures, and writes failed/blocked/successful sign-in events to the backend logs.
 - **Catalog + settings**: Browse the live catalog, search/filter routes, export/import the full route bundle, and edit endpoint identity/runtime behavior without competing against the schema canvas.
 - **Profile**: Dedicated self-service account page for the signed-in admin user, including account summary, full-name/email/username/profile-image updates, permission visibility, and password rotation.
 - **Users**: Separate superuser-only user-management page that treats the directory as the primary surface, adds summary cards plus search/filter controls, opens account creation in a dedicated dialog, and supports creating, editing, disabling, and deleting admin accounts with optional profile-image URLs plus activity metadata such as last sign-in and account creation time.
@@ -80,6 +81,7 @@ The preview endpoint accepts a response schema plus optional path params, query 
 - Canvas selection should always drive the inspector directly; nested node clicks must update the active inspector target instead of bubbling back up to parent containers.
 - The dedicated route-preview screen hits the public mock endpoint directly so runtime behavior matches the backend dispatcher, appending only non-empty query parameters after resolving the configured path placeholders, while schema-studio response preview uses the authenticated preview API for fast editor feedback.
 - Validation runs both in the browser for basic field checks and in the backend when saving.
+- The public/API/admin shells now serve baseline security headers (`CSP`, `X-Frame-Options`, `X-Content-Type-Options`, and `Referrer-Policy`), with HSTS added automatically on HTTPS API responses and in the runtime Nginx config.
 - Use skeleton states during session restore and initial catalog/editor loads to keep state transitions visually stable.
 - Prefer Vuetify components wherever possible to keep styling, states, and interaction affordances consistent across the admin journey.
 - Follow Vuetify's density guidance by defaulting interactive admin controls toward `compact` density unless a specific control needs more room for readability.

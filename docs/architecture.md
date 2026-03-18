@@ -11,8 +11,10 @@ Mockingbird is built as a **monorepo** with a public API surface and a private a
     - **Public landing/reference**: a branded homepage at `/` and `/api` plus `/api/reference.json`, both driven from the same live endpoint catalog. The landing hero can read approved frame artwork from `apps/api/static/landing/`.
   - **Postgres** is used as the single source of truth for endpoint definitions.
   - Private admin path space such as `/api/admin` is reserved and cannot be claimed by DB-backed public mock endpoints.
+  - Baseline browser hardening headers now ship from the FastAPI layer, while the admin frontend mirrors them in both Vite dev and the runtime Nginx image.
   - **OpenAPI generation** is performed at runtime from the active endpoint catalog.
   - **Mock generation** supports fixed, true-random, and mocking-random response values from `response_schema`, explicit semantic value types for context-aware data like IDs, names, emails, prices, and long-form text fields, request-aware string templating through `x-mock.template`, and a deliberately snarkier Mockingbird voice in `mocking` mode.
+  - Public route matching now escapes static path text before translating `{param}` placeholders, and the async public catchall offloads sync DB/sample-generation work to worker threads so runtime traffic does not block the event loop on SQLModel I/O.
 
 - **Frontend (`apps/admin-web/`)**
   - Vue + Vite + Vuetify admin dashboard.

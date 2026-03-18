@@ -25,6 +25,10 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("ADMIN_BOOTSTRAP_PASSWORD", "ADMIN_PASSWORD"),
     )
     admin_password_min_length: int = Field(default=12, validation_alias="ADMIN_PASSWORD_MIN_LENGTH")
+    admin_login_max_attempts: int = Field(default=5, validation_alias="ADMIN_LOGIN_MAX_ATTEMPTS")
+    admin_login_ip_max_attempts: int = Field(default=10, validation_alias="ADMIN_LOGIN_IP_MAX_ATTEMPTS")
+    admin_login_window_seconds: int = Field(default=300, validation_alias="ADMIN_LOGIN_WINDOW_SECONDS")
+    admin_login_lockout_seconds: int = Field(default=900, validation_alias="ADMIN_LOGIN_LOCKOUT_SECONDS")
     admin_session_ttl_hours: int = Field(default=12, validation_alias="ADMIN_SESSION_TTL_HOURS")
     admin_remember_me_ttl_days: int = Field(default=30, validation_alias="ADMIN_REMEMBER_ME_TTL_DAYS")
 

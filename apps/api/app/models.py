@@ -59,6 +59,9 @@ class AdminUser(SQLModel, table=True):
         sa_column=Column(String(32), nullable=False, server_default=AdminRole.editor.value),
     )
     is_superuser: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default="0"))
+    failed_login_attempts: int = Field(default=0, nullable=False)
+    last_failed_login_at: Optional[datetime] = None
+    locked_until: Optional[datetime] = None
     must_change_password: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default="0"))
     last_login_at: Optional[datetime] = None
     password_changed_at: Optional[datetime] = None

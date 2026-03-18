@@ -3,10 +3,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import math
 import re
 import secrets
+import time
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import timedelta
+from threading import Lock
 from urllib.parse import urlparse
 
 from fastapi import Depends, HTTPException, status
@@ -46,6 +50,60 @@ class BootstrapAdminResult:
 class AdminContext:
     user: AdminUser
     session: AdminSession
+
+
+@dataclass(slots=True)
+class AdminLoginThrottleError(Exception):
+    retry_after_seconds: int
+
+
+class LoginAttemptLimiter:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._attempts: dict[str, deque[float]] = defaultdict(deque)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._attempts.clear()
+
+    def record_failure(self, key: str | None) -> None:
+        normalized_key = (key or "").strip()
+        if not normalized_key:
+            return
+
+        now = time.monotonic()
+        with self._lock:
+            attempts = self._attempts[normalized_key]
+            self._prune(attempts, now)
+            attempts.append(now)
+
+    def retry_after_seconds(self, key: str | None, *, max_attempts: int) -> int | None:
+        normalized_key = (key or "").strip()
+        if not normalized_key or max_attempts <= 0:
+            return None
+
+        now = time.monotonic()
+        with self._lock:
+            attempts = self._attempts.get(normalized_key)
+            if not attempts:
+                return None
+
+            self._prune(attempts, now)
+            if len(attempts) < max_attempts:
+                if not attempts:
+                    self._attempts.pop(normalized_key, None)
+                return None
+
+            retry_after = settings.admin_login_window_seconds - (now - attempts[0])
+            return max(1, math.ceil(retry_after))
+
+    def _prune(self, attempts: deque[float], now: float) -> None:
+        cutoff = now - settings.admin_login_window_seconds
+        while attempts and attempts[0] <= cutoff:
+            attempts.popleft()
+
+
+login_attempt_limiter = LoginAttemptLimiter()
 
 
 def normalize_username(username: str) -> str:
@@ -169,6 +227,82 @@ def get_admin_user_by_email(session: Session, email: str) -> AdminUser | None:
         return None
     statement = select(AdminUser).where(AdminUser.email == normalized_email)
     return session.execute(statement).scalars().first()
+
+
+def reset_login_rate_limits() -> None:
+    login_attempt_limiter.clear()
+
+
+def _seconds_until(timestamp) -> int:
+    return max(1, math.ceil((timestamp - utc_now()).total_seconds()))
+
+
+def _reset_failed_login_state(user: AdminUser) -> None:
+    user.failed_login_attempts = 0
+    user.last_failed_login_at = None
+    user.locked_until = None
+
+
+def _persist_failed_login_state(session: Session, user: AdminUser) -> None:
+    user.updated_at = utc_now()
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+
+
+def _record_failed_login(session: Session, user: AdminUser | None, *, normalized_username: str, client_ip: str | None) -> None:
+    login_attempt_limiter.record_failure(client_ip)
+
+    if user and user.is_active:
+        now = utc_now()
+        if (
+            user.last_failed_login_at is None
+            or (now - user.last_failed_login_at) > timedelta(seconds=settings.admin_login_window_seconds)
+        ):
+            user.failed_login_attempts = 0
+
+        user.failed_login_attempts += 1
+        user.last_failed_login_at = now
+        if user.failed_login_attempts >= settings.admin_login_max_attempts:
+            user.locked_until = now + timedelta(seconds=settings.admin_login_lockout_seconds)
+            user.failed_login_attempts = 0
+            user.last_failed_login_at = None
+            LOGGER.warning(
+                "Admin login locked user '%s' after repeated failures from %s.",
+                normalized_username or "<blank>",
+                client_ip or "unknown",
+            )
+
+        _persist_failed_login_state(session, user)
+
+    LOGGER.warning(
+        "Admin login failed for username '%s' from %s.",
+        normalized_username or "<blank>",
+        client_ip or "unknown",
+    )
+
+
+def _ensure_login_allowed(user: AdminUser | None, *, normalized_username: str, client_ip: str | None) -> None:
+    retry_after = login_attempt_limiter.retry_after_seconds(
+        client_ip,
+        max_attempts=settings.admin_login_ip_max_attempts,
+    )
+    if retry_after is not None:
+        LOGGER.warning(
+            "Admin login throttled for IP %s while attempting username '%s'.",
+            client_ip or "unknown",
+            normalized_username or "<blank>",
+        )
+        raise AdminLoginThrottleError(retry_after_seconds=retry_after)
+
+    if user and user.locked_until and user.locked_until > utc_now():
+        retry_after = _seconds_until(user.locked_until)
+        LOGGER.warning(
+            "Admin login blocked for locked user '%s' from %s.",
+            normalized_username or "<blank>",
+            client_ip or "unknown",
+        )
+        raise AdminLoginThrottleError(retry_after_seconds=retry_after)
 
 
 def list_admin_users(session: Session) -> list[AdminUser]:
@@ -376,12 +510,34 @@ def delete_admin_user(session: Session, user: AdminUser) -> None:
     session.commit()
 
 
-def authenticate_admin_user(session: Session, username: str, password: str) -> AdminUser | None:
-    user = get_admin_user_by_username(session, username)
+def authenticate_admin_user(
+    session: Session,
+    username: str,
+    password: str,
+    *,
+    client_ip: str | None = None,
+) -> AdminUser | None:
+    normalized_username = normalize_username(username)
+    user = get_admin_user_by_username(session, normalized_username)
+    _ensure_login_allowed(user, normalized_username=normalized_username, client_ip=client_ip)
+
     if not user or not user.is_active:
+        _record_failed_login(session, None, normalized_username=normalized_username, client_ip=client_ip)
         return None
     if not verify_password(password, user.password_hash):
+        _record_failed_login(session, user, normalized_username=normalized_username, client_ip=client_ip)
         return None
+
+    if user.failed_login_attempts or user.last_failed_login_at or user.locked_until:
+        _reset_failed_login_state(user)
+        user.updated_at = utc_now()
+        session.add(user)
+
+    LOGGER.info(
+        "Admin login succeeded for username '%s' from %s.",
+        normalized_username or "<blank>",
+        client_ip or "unknown",
+    )
     return user
 
 
@@ -447,16 +603,17 @@ def update_own_account(
         session.refresh(user)
         return user
 
-    normalized_username = normalize_username(username)
-    if not normalized_username:
-        raise ValueError("Usernames cannot be blank.")
+    if username is not None:
+        normalized_username = normalize_username(username)
+        if not normalized_username:
+            raise ValueError("Usernames cannot be blank.")
 
-    existing_user = get_admin_user_by_username(session, normalized_username)
-    if existing_user and existing_user.id != user.id:
-        raise ValueError("That username is already in use.")
+        existing_user = get_admin_user_by_username(session, normalized_username)
+        if existing_user and existing_user.id != user.id:
+            raise ValueError("That username is already in use.")
 
-    if user.username != normalized_username:
-        user.username = normalized_username
+        if user.username != normalized_username:
+            user.username = normalized_username
 
     if full_name is not PROFILE_UNSET:
         user.full_name = normalize_optional_profile_text(full_name, label="Full name", max_length=160)

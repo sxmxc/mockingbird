@@ -105,3 +105,4 @@ This file tracks the work needed to bootstrap and evolve the project.
 - [x] Round out admin account/user management with profile fields, avatar support plus Gravatar fallback, directory search/activity metadata, and a migration path that keeps Alembic on the configured database
 - [x] Redesign the admin shell and users page with a cleaner top bar, directory-first user management, and dialog-based account creation
 - [x] Remove deprecated Vuetify theme and row-density usage surfaced by admin console warnings
+- [x] Harden the public/admin surfaces against landing-page XSS, literal-path route matching, login brute forcing, missing security headers, catchall event-loop blocking, and partial profile update failures

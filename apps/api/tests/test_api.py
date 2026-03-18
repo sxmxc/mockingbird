@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 import app.db as db_module
+import app.services.admin_auth as admin_auth_module
 from app.db import create_db_and_tables, engine
 from app.main import app
 from app.models import EndpointDefinition
@@ -36,6 +37,7 @@ def _reset_db() -> None:
     if TEST_DB_PATH.exists():
         TEST_DB_PATH.unlink()
     create_db_and_tables()
+    admin_auth_module.reset_login_rate_limits()
 
 
 def _bearer_headers(token: str) -> dict[str, str]:
@@ -145,6 +147,9 @@ def test_create_db_and_tables_uses_alembic_schema():
     assert "full_name" in admin_columns
     assert "email" in admin_columns
     assert "avatar_url" in admin_columns
+    assert "failed_login_attempts" in admin_columns
+    assert "last_failed_login_at" in admin_columns
+    assert "locked_until" in admin_columns
 
 
 def test_openapi_endpoint(seeded_db):
@@ -196,6 +201,47 @@ def test_public_landing_reference_and_brand_asset(seeded_db):
     asset = client.get("/static/mockingbird-icon.svg")
     assert asset.status_code == 200
     assert asset.headers["content-type"].startswith("image/svg+xml")
+
+
+def test_public_landing_escapes_embedded_reference_payload(empty_db):
+    client = TestClient(app)
+    headers = _login_headers(client)
+
+    create_response = client.post(
+        "/api/admin/endpoints",
+        json=_endpoint_payload(
+            name='</script><script>window.__MB_XSS__="pwned"</script>',
+            path="/api/xss-test.+",
+        ),
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+
+    landing = client.get("/")
+    assert landing.status_code == 200
+    assert '<script id="initial-reference-data" type="application/json">' in landing.text
+    assert "\\u003c/script\\u003e\\u003cscript\\u003ewindow.__MB_XSS__" in landing.text
+    assert '</script><script>window.__MB_XSS__="pwned"</script>' not in landing.text
+
+
+def test_security_headers_are_present_on_public_and_api_responses(seeded_db):
+    client = TestClient(app)
+
+    landing = client.get("/")
+    assert landing.headers["x-content-type-options"] == "nosniff"
+    assert landing.headers["x-frame-options"] == "DENY"
+    assert landing.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert "content-security-policy" in landing.headers
+
+    reference = client.get("/api/reference.json")
+    assert reference.headers["x-content-type-options"] == "nosniff"
+    assert reference.headers["x-frame-options"] == "DENY"
+    assert reference.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert reference.headers["content-security-policy"] == "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+
+    secure_client = TestClient(app, base_url="https://testserver")
+    secure_reference = secure_client.get("/api/reference.json")
+    assert secure_reference.headers["strict-transport-security"] == "max-age=31536000; includeSubDomains"
 
 
 def test_admin_endpoints_require_admin_session(empty_db):
@@ -283,6 +329,75 @@ def test_admin_account_profile_endpoints_update_the_current_user(empty_db):
         },
     )
     assert renamed_login_response.status_code == 200
+
+    partial_update_response = client.put(
+        "/api/admin/account/me",
+        json={"full_name": "Renamed Admin"},
+        headers=headers,
+    )
+    assert partial_update_response.status_code == 200
+    assert partial_update_response.json()["user"]["username"] == "admin-renamed"
+    assert partial_update_response.json()["user"]["full_name"] == "Renamed Admin"
+
+
+def test_admin_login_locks_user_after_repeated_failures(empty_db, monkeypatch: pytest.MonkeyPatch):
+    client = TestClient(app)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_max_attempts", 2)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_ip_max_attempts", 99)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_window_seconds", 300)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_lockout_seconds", 60)
+
+    for _ in range(2):
+        failed_response = client.post(
+            "/api/admin/auth/login",
+            json={
+                "username": "admin",
+                "password": "wrong-password",
+                "remember_me": False,
+            },
+        )
+        assert failed_response.status_code == 401
+
+    locked_response = client.post(
+        "/api/admin/auth/login",
+        json={
+            "username": "admin",
+            "password": INITIAL_ADMIN_PASSWORD,
+            "remember_me": False,
+        },
+    )
+    assert locked_response.status_code == 429
+    assert int(locked_response.headers["retry-after"]) >= 1
+
+
+def test_admin_login_throttles_repeated_failures_from_the_same_ip(empty_db, monkeypatch: pytest.MonkeyPatch):
+    client = TestClient(app)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_max_attempts", 99)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_ip_max_attempts", 2)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_window_seconds", 300)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_lockout_seconds", 60)
+
+    for _ in range(2):
+        failed_response = client.post(
+            "/api/admin/auth/login",
+            json={
+                "username": "unknown-user",
+                "password": "wrong-password",
+                "remember_me": False,
+            },
+        )
+        assert failed_response.status_code == 401
+
+    throttled_response = client.post(
+        "/api/admin/auth/login",
+        json={
+            "username": "unknown-user",
+            "password": "wrong-password",
+            "remember_me": False,
+        },
+    )
+    assert throttled_response.status_code == 429
+    assert int(throttled_response.headers["retry-after"]) >= 1
 
 
 def test_get_session_dependency_closes_session_context():
@@ -543,6 +658,27 @@ def test_private_admin_paths_cannot_be_created_as_public_mocks(empty_db):
 
     assert response.status_code == 422
     assert "reserved for private admin routes" in response.json()["detail"]
+
+
+def test_public_route_matching_treats_saved_paths_as_literals(empty_db):
+    client = TestClient(app)
+    headers = _login_headers(client)
+
+    create_response = client.post(
+        "/api/admin/endpoints",
+        json=_endpoint_payload(name="Regex Literal", path="/api/regex-test.+"),
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+
+    literal_response = client.get("/api/regex-test.+")
+    assert literal_response.status_code == 200
+
+    fuzzy_response = client.get("/api/regex-testXYZ")
+    assert fuzzy_response.status_code == 404
+
+    child_response = client.get("/api/regex-test.+/child")
+    assert child_response.status_code == 404
 
 
 def test_admin_crud_lifecycle_supports_builder_extensions(empty_db):
