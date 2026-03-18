@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import random
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 from decimal import Decimal
@@ -117,6 +119,7 @@ MOCK_VALUE_TYPE_ALIASES = {
     "mediatype": "mime_type",
     "systemverb": "verb",
 }
+TEMPLATE_EXPRESSION_PATTERN = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 
 
 @dataclass
@@ -124,6 +127,8 @@ class GenerationContext:
     rng: random.Random
     faker: Faker
     path_parameters: dict[str, str]
+    query_parameters: dict[str, str]
+    request_body: Any
 
 
 def _stable_seed(identity: str, seed_key: str | None) -> int:
@@ -140,12 +145,20 @@ def build_generation_context(
     identity: str,
     seed_key: str | None,
     path_parameters: dict[str, str] | None = None,
+    query_parameters: dict[str, str] | None = None,
+    request_body: Any = None,
 ) -> GenerationContext:
     seed = _stable_seed(identity, seed_key)
     rng = random.Random(seed)
     faker = Faker()
     faker.seed_instance(rng.randint(0, 2 ** 31 - 1))
-    return GenerationContext(rng=rng, faker=faker, path_parameters=dict(path_parameters or {}))
+    return GenerationContext(
+        rng=rng,
+        faker=faker,
+        path_parameters=dict(path_parameters or {}),
+        query_parameters=dict(query_parameters or {}),
+        request_body=deepcopy(request_body),
+    )
 
 
 def _coerce_int(value: Any, default: int) -> int:
@@ -402,6 +415,22 @@ def _generate_string(schema: dict[str, Any], context: GenerationContext) -> str:
     return value[:max_length]
 
 
+def _apply_template_string_constraints(schema: dict[str, Any], value: str, context: GenerationContext) -> str:
+    min_length = max(_coerce_int(schema.get("minLength"), 0), 0)
+    raw_max_length = schema.get("maxLength")
+    max_length = None
+    if isinstance(raw_max_length, (int, float)) and not isinstance(raw_max_length, bool):
+        max_length = max(_coerce_int(raw_max_length, min_length), min_length)
+
+    if len(value) < min_length:
+        filler = context.faker.lexify(text="?" * (min_length - len(value)))
+        value = f"{value}{filler}"
+
+    if max_length is not None:
+        return value[:max_length]
+    return value
+
+
 def _generate_integer(schema: dict[str, Any], context: GenerationContext) -> int:
     if schema.get("enum"):
         return int(context.rng.choice(schema["enum"]))
@@ -474,6 +503,105 @@ def _generate_array(schema: dict[str, Any], context: GenerationContext) -> list[
     return [generate_value(items, context) for _ in range(count)]
 
 
+def _template_string(schema: dict[str, Any]) -> str | None:
+    if not isinstance(schema, dict):
+        return None
+    mock_config = schema.get("x-mock", {}) if isinstance(schema.get("x-mock"), dict) else {}
+    template = mock_config.get("template")
+    if not isinstance(template, str):
+        return None
+    stripped = template.strip()
+    return stripped or None
+
+
+def _lookup_template_path(value: Any, segments: list[str]) -> Any:
+    current = value
+    for segment in segments:
+        if isinstance(current, dict):
+            if segment not in current:
+                return None
+            current = current[segment]
+            continue
+
+        if isinstance(current, list):
+            try:
+                index = int(segment)
+            except (TypeError, ValueError):
+                return None
+            if index < 0 or index >= len(current):
+                return None
+            current = current[index]
+            continue
+
+        return None
+
+    return current
+
+
+def _stringify_template_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, separators=(",", ":"), default=str)
+    return str(value)
+
+
+def _resolve_template_token(token: str, *, base_value: Any, context: GenerationContext) -> Any:
+    normalized = token.strip()
+    if normalized == "value":
+        return base_value
+
+    parts = [segment.strip() for segment in normalized.split(".") if segment.strip()]
+    if len(parts) < 3 or parts[0] != "request":
+        return None
+
+    location = parts[1]
+    remainder = parts[2:]
+    if location == "path":
+        return _lookup_template_path(context.path_parameters, remainder)
+    if location == "query":
+        return _lookup_template_path(context.query_parameters, remainder)
+    if location == "body":
+        return _lookup_template_path(context.request_body, remainder)
+    return None
+
+
+def _render_template_string(template: str, *, base_value: Any, schema: dict[str, Any], context: GenerationContext) -> str:
+    rendered = TEMPLATE_EXPRESSION_PATTERN.sub(
+        lambda match: _stringify_template_value(
+            _resolve_template_token(match.group(1), base_value=base_value, context=context)
+        ),
+        template,
+    )
+    return _apply_template_string_constraints(schema, rendered, context)
+
+
+def render_templated_value(schema: Any, value: Any, context: GenerationContext) -> Any:
+    if not isinstance(schema, dict):
+        return value
+
+    if (schema.get("type") == "object" or "properties" in schema) and isinstance(value, dict):
+        properties = schema.get("properties", {}) or {}
+        return {
+            key: render_templated_value(properties.get(key), child_value, context)
+            for key, child_value in value.items()
+        }
+
+    if (schema.get("type") == "array" or "items" in schema) and isinstance(value, list):
+        item_schema = schema.get("items") or {"type": "string"}
+        return [render_templated_value(item_schema, item, context) for item in value]
+
+    template = _template_string(schema)
+    if template is not None and isinstance(value, str):
+        return _render_template_string(template, base_value=value, schema=schema, context=context)
+
+    return value
+
+
 def generate_value(schema: Any, context: GenerationContext) -> Any:
     if not isinstance(schema, dict):
         return deepcopy(schema)
@@ -515,8 +643,17 @@ def preview_from_schema(
     *,
     identity: str,
     path_parameters: dict[str, str] | None = None,
+    query_parameters: dict[str, str] | None = None,
+    request_body: Any = None,
     seed_key: str | None,
 ) -> Any:
-    context = build_generation_context(identity, seed_key, path_parameters=path_parameters)
+    context = build_generation_context(
+        identity,
+        seed_key,
+        path_parameters=path_parameters,
+        query_parameters=query_parameters,
+        request_body=request_body,
+    )
     normalized_schema = normalize_schema_for_builder(response_schema or {}, property_name="root", include_mock=True)
-    return generate_value(normalized_schema, context)
+    base_value = generate_value(normalized_schema, context)
+    return render_templated_value(normalized_schema, base_value, context)

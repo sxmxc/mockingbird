@@ -47,6 +47,7 @@ const pathParameterDefinitions = computed<RequestParameterDefinition[]>(() =>
 const queryParameterDefinitions = computed<RequestParameterDefinition[]>(() =>
   endpoint.value ? extractRequestParameterDefinitions(endpoint.value.request_schema ?? {}, "query") : [],
 );
+const canWriteRoutes = computed(() => auth.canWriteRoutes.value && !auth.mustChangePassword.value);
 
 function buildDefaultQueryParameterValues(parameters: RequestParameterDefinition[]): Record<string, string> {
   return parameters.reduce<Record<string, string>>((accumulator, parameter) => {
@@ -195,12 +196,12 @@ async function runPreview(): Promise<void> {
         <v-btn
           prepend-icon="mdi-arrow-left"
           variant="text"
-          @click="router.push({ name: endpoint ? 'endpoints-edit' : 'endpoints-browse', params: endpoint ? { endpointId: endpoint.id } : undefined })"
+          @click="router.push({ name: canWriteRoutes ? (endpoint ? 'endpoints-edit' : 'endpoints-browse') : 'endpoints-browse', params: canWriteRoutes && endpoint ? { endpointId: endpoint.id } : undefined })"
         >
-          Back to settings
+          {{ canWriteRoutes ? "Back to route" : "Back to routes" }}
         </v-btn>
         <v-btn
-          v-if="endpoint"
+          v-if="endpoint && canWriteRoutes"
           prepend-icon="mdi-shape-outline"
           variant="text"
           @click="router.push({ name: 'schema-editor', params: { endpointId: endpoint.id } })"
@@ -250,7 +251,7 @@ async function runPreview(): Promise<void> {
         {{ previewError }}
       </v-alert>
 
-      <v-row dense>
+      <v-row density="comfortable">
         <v-col cols="12" lg="5">
           <v-card class="workspace-card fill-height">
             <v-card-item>

@@ -105,7 +105,7 @@ describe("EndpointCatalog", () => {
     expect(screen.getByText("List invoices")).toBeInTheDocument();
   });
 
-  it("emits duplicate without selecting the row when the copy action is clicked", () => {
+  it("emits duplicate without selecting the row when the copy action is clicked", async () => {
     const handleDuplicate = vi.fn();
     const handleSelect = vi.fn();
 
@@ -123,9 +123,9 @@ describe("EndpointCatalog", () => {
       },
     });
 
-    const duplicateButton = document.querySelector('[aria-label="Duplicate route"]');
+    const duplicateButton = document.querySelector(".catalog-duplicate-btn");
     expect(duplicateButton).not.toBeNull();
-    duplicateButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await fireEvent.click(duplicateButton as Element);
 
     expect(handleDuplicate).toHaveBeenCalledWith(1);
     expect(handleSelect).not.toHaveBeenCalled();

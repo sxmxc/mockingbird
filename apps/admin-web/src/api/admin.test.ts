@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { exportEndpointBundle, importEndpointBundle } from "./admin";
+import { exportEndpointBundle, getAccountProfile, importEndpointBundle, updateAccountProfile } from "./admin";
 import type { AdminSession, EndpointBundle, EndpointImportRequestPayload } from "../types/endpoints";
 
 const session: AdminSession = {
@@ -8,7 +8,13 @@ const session: AdminSession = {
   user: {
     id: 1,
     username: "admin",
+    full_name: "Admin User",
+    email: "admin@example.com",
+    avatar_url: null,
+    gravatar_url: "https://www.gravatar.com/avatar/admin?d=identicon&s=160",
     is_active: true,
+    role: "superuser",
+    permissions: ["routes.read", "routes.write", "routes.preview", "users.manage"],
     is_superuser: true,
     must_change_password: false,
     last_login_at: null,
@@ -140,5 +146,62 @@ describe("admin endpoint bundle API", () => {
     const headers = init.headers as Headers;
     expect(headers.get("Authorization")).toBe("Bearer session-token");
     expect(headers.get("Content-Type")).toBe("application/json");
+  });
+
+  it("loads the current account profile with bearer auth", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(session.user));
+
+    const result = await getAccountProfile(session);
+
+    expect(result.username).toBe("admin");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/account/me",
+      expect.objectContaining({
+        headers: expect.any(Headers),
+      }),
+    );
+  });
+
+  it("updates the current account profile through the dedicated account endpoint", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        expires_at: session.expires_at,
+        user: {
+          ...session.user,
+          full_name: "Admin Renamed",
+          email: "admin-renamed@example.com",
+          avatar_url: "https://cdn.example.com/admin.png",
+          username: "admin-renamed",
+        },
+      }),
+    );
+
+    const result = await updateAccountProfile(
+      {
+        username: "admin-renamed",
+        full_name: "Admin Renamed",
+        email: "admin-renamed@example.com",
+        avatar_url: "https://cdn.example.com/admin.png",
+      },
+      session,
+    );
+
+    expect(result.user.username).toBe("admin-renamed");
+    expect(result.user.full_name).toBe("Admin Renamed");
+    expect(result.user.email).toBe("admin-renamed@example.com");
+    expect(result.user.avatar_url).toBe("https://cdn.example.com/admin.png");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/account/me",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          username: "admin-renamed",
+          full_name: "Admin Renamed",
+          email: "admin-renamed@example.com",
+          avatar_url: "https://cdn.example.com/admin.png",
+        }),
+        headers: expect.any(Headers),
+      }),
+    );
   });
 });

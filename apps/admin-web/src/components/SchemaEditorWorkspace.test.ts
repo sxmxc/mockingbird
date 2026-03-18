@@ -18,7 +18,13 @@ const authStub = vi.hoisted(() => ({
       user: {
         id: 1,
         username: "admin",
+        full_name: "Admin User",
+        email: "admin@example.com",
+        avatar_url: null,
+        gravatar_url: "https://www.gravatar.com/avatar/admin?d=identicon&s=160",
         is_active: true,
+        role: "superuser",
+        permissions: ["routes.read", "routes.write", "routes.preview", "users.manage"],
         is_superuser: true,
         must_change_password: false,
         last_login_at: null,
@@ -53,7 +59,14 @@ function createRouterInstance() {
 }
 
 async function renderWorkspace(
-  props: { pathParameters?: Array<ReturnType<typeof createRequestParameterDefinition> | string>; schema: JsonObject; scope: BuilderScope; seedKey?: string },
+  props: {
+    pathParameters?: Array<ReturnType<typeof createRequestParameterDefinition> | string>;
+    queryParameters?: Array<ReturnType<typeof createRequestParameterDefinition>>;
+    requestBodySchema?: JsonObject;
+    schema: JsonObject;
+    scope: BuilderScope;
+    seedKey?: string;
+  },
 ): Promise<ReturnType<typeof render> & { router: ReturnType<typeof createRouterInstance> }> {
   const router = createRouterInstance();
   await router.push("/");
@@ -89,6 +102,26 @@ function findSchemaNodeByLabel(label: string): HTMLElement | null {
   return Array.from(document.querySelectorAll<HTMLElement>("[data-node-id]")).find(
     (element) => element.querySelector(".schema-node-pill-label")?.textContent?.trim() === label,
   ) ?? null;
+}
+
+function findNodeDragHandleByLabel(label: string): HTMLElement | null {
+  const node = findSchemaNodeByLabel(label);
+  const nodeId = node?.getAttribute("data-node-id");
+  if (!nodeId) {
+    return null;
+  }
+
+  return document.querySelector<HTMLElement>(`[data-node-drag-handle="${nodeId}"]`);
+}
+
+function findNodeCollapseToggleByLabel(label: string): HTMLElement | null {
+  const node = findSchemaNodeByLabel(label);
+  const nodeId = node?.getAttribute("data-node-id");
+  if (!nodeId) {
+    return null;
+  }
+
+  return document.querySelector<HTMLElement>(`[data-collapse-toggle="${nodeId}"]`);
 }
 
 describe("SchemaEditorWorkspace", () => {
@@ -144,6 +177,41 @@ describe("SchemaEditorWorkspace", () => {
     });
   }, 30_000);
 
+  it("adds a request field through the plus-button insert menu", async () => {
+    const { emitted } = await renderWorkspace({
+      schema: {
+        type: "object",
+        properties: {},
+        required: [],
+        "x-builder": {
+          order: [],
+        },
+      },
+      scope: "request",
+    });
+
+    const rootInsertButton = document.querySelector('[data-insert-menu="container"][data-insert-target="builder-root"]');
+    expect(rootInsertButton).not.toBeNull();
+
+    await fireEvent.click(rootInsertButton as Element);
+    await flushPromises();
+
+    const insertStringOption = document.querySelector('[data-insert-placement="container"][data-insert-type="string"]');
+    expect(insertStringOption).not.toBeNull();
+    await fireEvent.click(insertStringOption as Element);
+
+    const schemaUpdates = emitted()["update:schema"] as Array<[JsonObject]> | undefined;
+    expect(schemaUpdates?.at(-1)?.[0]).toMatchObject({
+      type: "object",
+      properties: {
+        field: {
+          type: "string",
+        },
+      },
+      required: [],
+    });
+  }, 30_000);
+
   it("reorders object siblings through the row insertion anchor", async () => {
     const { emitted } = await renderWorkspace({
       schema: {
@@ -165,7 +233,7 @@ describe("SchemaEditorWorkspace", () => {
     });
 
     const idNode = findSchemaNodeByLabel("id");
-    const valueNode = findSchemaNodeByLabel("value");
+    const valueNode = findNodeDragHandleByLabel("value");
 
     expect(idNode).not.toBeNull();
     expect(valueNode).not.toBeNull();
@@ -449,6 +517,130 @@ describe("SchemaEditorWorkspace", () => {
     });
   }, 15_000);
 
+  it("marks the selected canvas row with a dedicated selected indicator", async () => {
+    await renderWorkspace({
+      schema: createObjectSchema(),
+      scope: "response",
+    });
+
+    const quoteNode = findSchemaNodeByLabel("quote");
+    expect(quoteNode).not.toBeNull();
+
+    await fireEvent.click(quoteNode as Element);
+
+    const selectedRow = (quoteNode as HTMLElement).closest(".schema-tree-row");
+    expect(selectedRow).not.toBeNull();
+    expect(selectedRow).toHaveClass("schema-tree-row-selected");
+    expect(selectedRow?.querySelector(".schema-node-selected-pill")?.textContent).toContain("selected");
+  });
+
+  it("collapses and expands object branches from the canvas", async () => {
+    await renderWorkspace({
+      schema: {
+        type: "object",
+        properties: {
+          meta: {
+            type: "object",
+            properties: {
+              count: {
+                type: "integer",
+              },
+            },
+            required: [],
+            "x-builder": {
+              order: ["count"],
+            },
+          },
+        },
+        required: [],
+        "x-builder": {
+          order: ["meta"],
+        },
+      },
+      scope: "request",
+    });
+
+    expect(findSchemaNodeByLabel("count")).not.toBeNull();
+
+    const collapseToggle = findNodeCollapseToggleByLabel("meta");
+    expect(collapseToggle).not.toBeNull();
+
+    await fireEvent.click(collapseToggle as Element);
+    expect(findSchemaNodeByLabel("count")).toBeNull();
+    expect(screen.getByText("1 field hidden")).toBeInTheDocument();
+
+    await fireEvent.click(collapseToggle as Element);
+    expect(findSchemaNodeByLabel("count")).not.toBeNull();
+  });
+
+  it("adds response templates through helper chips and persists them in x-mock metadata", async () => {
+    vi.mocked(previewResponse).mockResolvedValue({
+      preview: {
+        quote: "templated preview",
+      },
+    });
+
+    const { emitted } = await renderWorkspace({
+      pathParameters: ["orderId"],
+      queryParameters: [
+        createRequestParameterDefinition("query", {
+          name: "status",
+        }),
+      ],
+      requestBodySchema: {
+        type: "object",
+        properties: {
+          customer: {
+            type: "object",
+            properties: {
+              email: {
+                type: "string",
+                format: "email",
+              },
+            },
+            required: ["email"],
+            "x-builder": {
+              order: ["email"],
+            },
+          },
+        },
+        required: ["customer"],
+        "x-builder": {
+          order: ["customer"],
+        },
+      },
+      schema: createObjectSchema(),
+      scope: "response",
+    });
+
+    const quoteNode = findSchemaNodeByLabel("quote");
+    expect(quoteNode).not.toBeNull();
+    await fireEvent.click(quoteNode as Element);
+
+    expect(document.querySelector('[data-path-parameter="orderId"]')).not.toBeNull();
+    expect(document.querySelector('[data-query-parameter="status"]')).not.toBeNull();
+    expect(document.querySelector('[data-query-parameter="status"]')?.getAttribute("draggable")).toBe("false");
+
+    await fireEvent.click(screen.getByLabelText("Use template"));
+    await fireEvent.click(document.querySelector('[data-template-token="{{request.path.orderId}}"]') as Element);
+    await fireEvent.click(document.querySelector('[data-query-parameter="status"]') as Element);
+    await fireEvent.click(document.querySelector('[data-template-token="{{request.body.customer.email}}"]') as Element);
+
+    const schemaUpdates = emitted()["update:schema"] as Array<[JsonObject]> | undefined;
+    expect(schemaUpdates?.at(-1)?.[0]).toMatchObject({
+      properties: {
+        quote: {
+          type: "string",
+          "x-mock": {
+            template: "{{value}}{{request.path.orderId}}{{request.query.status}}{{request.body.customer.email}}",
+          },
+        },
+      },
+    });
+
+    expect(document.querySelector('[data-query-parameter="status"]')).toHaveClass("schema-value-pill-active");
+  });
+
   it("renders generated response previews and emits seed updates from the preview rail", async () => {
     vi.mocked(previewResponse).mockResolvedValue({
       preview: {
@@ -474,6 +666,10 @@ describe("SchemaEditorWorkspace", () => {
       expect.objectContaining({
         token: "session-token",
       }),
+      {
+        queryParameters: {},
+        requestBody: null,
+      },
     );
 
     expect(await screen.findByText(/hello from preview/)).toBeInTheDocument();
@@ -518,6 +714,10 @@ describe("SchemaEditorWorkspace", () => {
       expect.objectContaining({
         token: "session-token",
       }),
+      {
+        queryParameters: {},
+        requestBody: null,
+      },
     );
   });
 
@@ -554,6 +754,85 @@ describe("SchemaEditorWorkspace", () => {
       expect.objectContaining({
         token: "session-token",
       }),
+      {
+        queryParameters: {},
+        requestBody: null,
+      },
+    );
+  });
+
+  it("passes preview query parameters and request body context to the preview API", async () => {
+    vi.mocked(previewResponse).mockResolvedValue({
+      preview: {
+        quote: "hello from preview",
+      },
+    });
+
+    await renderWorkspace({
+      pathParameters: ["orderId"],
+      queryParameters: [
+        createRequestParameterDefinition("query", {
+          name: "status",
+        }),
+      ],
+      requestBodySchema: {
+        type: "object",
+        properties: {
+          customer: {
+            type: "object",
+            properties: {
+              email: {
+                type: "string",
+                format: "email",
+              },
+            },
+            required: ["email"],
+            "x-builder": {
+              order: ["email"],
+            },
+          },
+        },
+        required: ["customer"],
+        "x-builder": {
+          order: ["customer"],
+        },
+      },
+      schema: createObjectSchema(),
+      scope: "response",
+    });
+
+    expect(screen.getAllByLabelText("Path: orderId")).toHaveLength(1);
+    expect(screen.getAllByLabelText("Query: status")).toHaveLength(1);
+    expect(screen.getAllByLabelText("Request body JSON")).toHaveLength(1);
+
+    await fireEvent.update(screen.getByLabelText("Path: orderId"), "ord-42");
+    await fireEvent.update(screen.getByLabelText("Query: status"), "queued");
+    await fireEvent.update(screen.getByLabelText("Request body JSON"), '{"customer":{"email":"ops@example.com"}}');
+
+    await vi.advanceTimersByTimeAsync(400);
+    await flushPromises();
+
+    expect(previewResponse).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        type: "object",
+      }),
+      null,
+      {
+        orderId: "ord-42",
+      },
+      expect.objectContaining({
+        token: "session-token",
+      }),
+      {
+        queryParameters: {
+          status: "queued",
+        },
+        requestBody: {
+          customer: {
+            email: "ops@example.com",
+          },
+        },
+      },
     );
   });
 

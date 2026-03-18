@@ -162,6 +162,8 @@ const availableTags = computed(() =>
 const canApplyImport = computed(() =>
   Boolean(importPreview.value) && !importPreview.value?.has_errors && !isPreviewingImport.value && !isApplyingImport.value,
 );
+const canWriteRoutes = computed(() => auth.canWriteRoutes.value && !auth.mustChangePassword.value);
+const canPreviewRoutes = computed(() => auth.canPreviewRoutes.value && !auth.mustChangePassword.value);
 
 function mergeEndpointCatalog(nextEndpoints: Endpoint[]): Endpoint[] {
   const currentEndpointsById = new Map(endpoints.value.map((endpoint) => [endpoint.id, endpoint]));
@@ -384,14 +386,26 @@ function applyDraftPatch(patch: Partial<EndpointDraft>): void {
 }
 
 function openCreateView(): void {
+  if (!canWriteRoutes.value) {
+    return;
+  }
+
   void router.push({ name: "endpoints-create" });
 }
 
 function openImportDialog(): void {
+  if (!canWriteRoutes.value) {
+    return;
+  }
+
   importDialog.value = true;
 }
 
 function duplicateEndpoint(endpointId: number): void {
+  if (!canWriteRoutes.value) {
+    return;
+  }
+
   void router.push({
     name: "endpoints-create",
     query: {
@@ -483,7 +497,7 @@ async function handleDelete(): Promise<void> {
 }
 
 function openSchemaStudio(): void {
-  if (!selectedEndpoint.value) {
+  if (!selectedEndpoint.value || !canWriteRoutes.value) {
     return;
   }
 
@@ -491,7 +505,7 @@ function openSchemaStudio(): void {
 }
 
 function openPreview(): void {
-  if (!selectedEndpoint.value) {
+  if (!selectedEndpoint.value || !canPreviewRoutes.value) {
     return;
   }
 
@@ -504,6 +518,15 @@ function duplicateSelectedEndpoint(): void {
   }
 
   duplicateEndpoint(selectedEndpoint.value.id);
+}
+
+function openEndpointFromCatalog(endpointId: number): void {
+  if (!canWriteRoutes.value && canPreviewRoutes.value) {
+    void router.push({ name: "endpoint-preview", params: { endpointId } });
+    return;
+  }
+
+  void router.push({ name: "endpoints-edit", params: { endpointId } });
 }
 
 function handleImportFileChange(value: File | File[] | null): void {
@@ -707,276 +730,284 @@ const activeTitle = computed(() => {
 </script>
 
 <template>
-  <v-row class="workspace-grid endpoint-workspace-grid">
-    <v-col class="endpoint-sidebar-col" cols="12" xl="3" lg="4">
-      <div class="endpoint-sidebar">
-        <EndpointCatalog
-          :active-endpoint-id="selectedEndpoint?.id"
-          :endpoints="endpoints"
-          :error="catalogError"
-          :loading="isLoading"
-          @create="openCreateView"
-          @duplicate="duplicateEndpoint"
-          @refresh="fetchEndpoints"
-          @select="(id) => router.push({ name: 'endpoints-edit', params: { endpointId: id } })"
-        />
-      </div>
-    </v-col>
+  <div class="d-flex flex-column ga-4">
+    <v-row class="workspace-grid endpoint-workspace-grid">
+      <v-col class="endpoint-sidebar-col" cols="12" xl="3" lg="4">
+        <div class="endpoint-sidebar">
+          <EndpointCatalog
+            :active-endpoint-id="selectedEndpoint?.id"
+            :allow-create="canWriteRoutes"
+            :allow-duplicate="canWriteRoutes"
+            :endpoints="endpoints"
+            :error="catalogError"
+            :loading="isLoading"
+            @create="openCreateView"
+            @duplicate="duplicateEndpoint"
+            @refresh="fetchEndpoints"
+            @select="openEndpointFromCatalog"
+          />
+        </div>
+      </v-col>
 
-    <v-col class="endpoint-detail-col" cols="12" xl="9" lg="8">
-      <div class="endpoint-detail-shell">
-        <v-alert v-if="pageSuccess" border="start" color="success" variant="tonal">
-          {{ pageSuccess }}
-        </v-alert>
+      <v-col class="endpoint-detail-col" cols="12" xl="9" lg="8">
+        <div class="endpoint-detail-shell">
+          <v-alert v-if="pageSuccess" border="start" color="success" variant="tonal">
+            {{ pageSuccess }}
+          </v-alert>
 
-        <v-alert v-if="pageError" border="start" color="error" variant="tonal">
-          {{ pageError }}
-        </v-alert>
+          <v-alert v-if="pageError" border="start" color="error" variant="tonal">
+            {{ pageError }}
+          </v-alert>
 
-        <v-alert v-if="duplicateBanner" border="start" color="info" variant="tonal">
-          {{ duplicateBanner }}
-        </v-alert>
+          <v-alert v-if="duplicateBanner" border="start" color="info" variant="tonal">
+            {{ duplicateBanner }}
+          </v-alert>
 
-        <div class="endpoint-detail-scroll">
-          <v-skeleton-loader
-            v-if="isInitialCatalogLoad"
-            class="workspace-card"
-            type="heading, paragraph, paragraph, paragraph, table-heading, table-row-divider, table-row-divider"
+          <div class="endpoint-detail-scroll">
+            <v-skeleton-loader
+              v-if="isInitialCatalogLoad"
+              class="workspace-card"
+              type="heading, paragraph, paragraph, paragraph, table-heading, table-row-divider, table-row-divider"
+            />
+
+            <v-card v-else-if="props.mode === 'browse'" class="workspace-card browse-card">
+              <v-card-text class="pa-8">
+                <div class="text-overline text-secondary">Routes</div>
+                <div class="text-h3 font-weight-bold mt-2">Choose a route or create a new one.</div>
+                <div class="text-body-1 text-medium-emphasis mt-4">
+                  {{
+                    canWriteRoutes
+                      ? "Select a route to edit its details, request and response schema, and live test flow."
+                      : "Select a route to preview its live behavior and inspect the catalog."
+                  }}
+                </div>
+                <div class="d-flex flex-wrap ga-3 mt-6">
+                  <v-btn v-if="canWriteRoutes" color="primary" prepend-icon="mdi-plus" @click="router.push({ name: 'endpoints-create' })">
+                    Create route
+                  </v-btn>
+                  <v-btn prepend-icon="mdi-refresh" variant="text" @click="fetchEndpoints">
+                    Refresh routes
+                  </v-btn>
+                  <v-btn :loading="isExporting" prepend-icon="mdi-download" variant="text" @click="exportRoutes">
+                    Export routes
+                  </v-btn>
+                  <v-btn v-if="canWriteRoutes" prepend-icon="mdi-upload" variant="text" @click="openImportDialog">
+                    Import routes
+                  </v-btn>
+                </div>
+              </v-card-text>
+            </v-card>
+
+            <v-card
+              v-else-if="props.mode === 'edit' && !selectedEndpoint"
+              class="workspace-card browse-card"
+            >
+              <v-card-text class="pa-8">
+                <div class="text-overline text-error">Missing endpoint</div>
+                <div class="text-h4 font-weight-bold mt-2">That route is no longer in the catalog.</div>
+                <div class="text-body-1 text-medium-emphasis mt-4">
+                  Refresh the list, pick another route, or create a new one.
+                </div>
+              </v-card-text>
+            </v-card>
+
+            <template v-else>
+              <v-slide-y-transition mode="out-in">
+                <div :key="recordTransitionKey" class="d-flex flex-column ga-4">
+                  <v-card class="workspace-card record-hero">
+                    <v-card-text class="d-flex flex-column flex-md-row justify-space-between ga-4">
+                      <div>
+                        <div class="text-overline text-secondary">
+                          {{ props.mode === "create" ? "New route" : "Route details" }}
+                        </div>
+                        <div class="text-h4 font-weight-bold mt-2">{{ activeTitle }}</div>
+                        <div class="text-body-1 text-medium-emphasis mt-3">
+                          {{
+                            props.mode === "create"
+                              ? "Set the path, method, and behavior first."
+                              : selectedEndpoint?.path
+                          }}
+                        </div>
+                      </div>
+
+                      <div class="d-flex flex-wrap align-start justify-end ga-2">
+                        <v-chip v-if="selectedEndpoint" color="primary" label size="small" variant="tonal">
+                          {{ selectedEndpoint.method }}
+                        </v-chip>
+                        <v-chip
+                          v-if="selectedEndpoint"
+                          :color="selectedEndpoint.enabled ? 'accent' : 'error'"
+                          label
+                          size="small"
+                          variant="tonal"
+                        >
+                          {{ selectedEndpoint.enabled ? "Live" : "Disabled" }}
+                        </v-chip>
+                        <v-chip v-if="selectedEndpoint?.category" color="secondary" label size="small" variant="tonal">
+                          {{ selectedEndpoint.category }}
+                        </v-chip>
+                      </div>
+                    </v-card-text>
+                  </v-card>
+
+                  <EndpointSettingsForm
+                    :available-categories="availableCategories"
+                    :available-tags="availableTags"
+                    :created-at="selectedEndpoint?.created_at"
+                    :draft="draft"
+                    :endpoint-id="selectedEndpoint?.id"
+                    :errors="fieldErrors"
+                    :is-creating="props.mode === 'create'"
+                    :is-saving="isSaving"
+                    :updated-at="selectedEndpoint?.updated_at"
+                    @change="applyDraftPatch"
+                    @delete="handleDelete"
+                    @duplicate="duplicateSelectedEndpoint"
+                    @open-schema="openSchemaStudio"
+                    @preview="openPreview"
+                    @submit="handleSave"
+                  />
+                </div>
+              </v-slide-y-transition>
+            </template>
+          </div>
+        </div>
+      </v-col>
+    </v-row>
+
+    <v-dialog v-model="importDialog" max-width="960">
+      <v-card class="workspace-card">
+        <v-card-item>
+          <v-card-title>Import routes</v-card-title>
+          <v-card-subtitle>Preview a native Mockingbird bundle before applying it to this catalog.</v-card-subtitle>
+        </v-card-item>
+
+        <v-divider />
+
+        <v-card-text class="d-flex flex-column ga-4">
+          <v-alert v-if="importError" border="start" color="error" variant="tonal">
+            {{ importError }}
+          </v-alert>
+
+          <v-alert
+            v-else-if="importPreview?.has_errors"
+            border="start"
+            color="warning"
+            variant="tonal"
+          >
+            Review the bundle errors below before importing routes.
+          </v-alert>
+
+          <v-select
+            :disabled="isPreviewingImport || isApplyingImport"
+            :items="importModeOptions"
+            item-title="title"
+            item-value="value"
+            label="Import mode"
+            :model-value="importMode"
+            @update:model-value="importMode = ($event as EndpointImportMode | null) ?? 'upsert'"
           />
 
-          <v-card v-else-if="props.mode === 'browse'" class="workspace-card browse-card">
-            <v-card-text class="pa-8">
-              <div class="text-overline text-secondary">Routes</div>
-              <div class="text-h3 font-weight-bold mt-2">Choose a route or create a new one.</div>
-              <div class="text-body-1 text-medium-emphasis mt-4">
-                Select a route to edit its details, request and response schema, and live test flow.
-              </div>
-              <div class="d-flex flex-wrap ga-3 mt-6">
-                <v-btn color="primary" prepend-icon="mdi-plus" @click="router.push({ name: 'endpoints-create' })">
-                  Create route
-                </v-btn>
-                <v-btn prepend-icon="mdi-refresh" variant="text" @click="fetchEndpoints">
-                  Refresh routes
-                </v-btn>
-                <v-btn :loading="isExporting" prepend-icon="mdi-download" variant="text" @click="exportRoutes">
-                  Export routes
-                </v-btn>
-                <v-btn prepend-icon="mdi-upload" variant="text" @click="openImportDialog">
-                  Import routes
-                </v-btn>
-              </div>
-            </v-card-text>
-          </v-card>
+          <v-file-input
+            accept=".json,application/json"
+            clearable
+            :disabled="isPreviewingImport || isApplyingImport"
+            label="Bundle file"
+            :model-value="importFile"
+            prepend-icon="mdi-file-import-outline"
+            show-size
+            @update:model-value="handleImportFileChange"
+          />
 
-          <v-card
-            v-else-if="props.mode === 'edit' && !selectedEndpoint"
-            class="workspace-card browse-card"
-          >
-            <v-card-text class="pa-8">
-              <div class="text-overline text-error">Missing endpoint</div>
-              <div class="text-h4 font-weight-bold mt-2">That route is no longer in the catalog.</div>
-              <div class="text-body-1 text-medium-emphasis mt-4">
-                Refresh the list, pick another route, or create a new one.
-              </div>
-            </v-card-text>
-          </v-card>
+          <div class="text-caption text-medium-emphasis">Or paste the bundle JSON directly.</div>
 
-          <template v-else>
-            <v-slide-y-transition mode="out-in">
-              <div :key="recordTransitionKey" class="d-flex flex-column ga-4">
-                <v-card class="workspace-card record-hero">
-                  <v-card-text class="d-flex flex-column flex-md-row justify-space-between ga-4">
-                    <div>
-                      <div class="text-overline text-secondary">
-                        {{ props.mode === "create" ? "New route" : "Route details" }}
-                      </div>
-                      <div class="text-h4 font-weight-bold mt-2">{{ activeTitle }}</div>
-                      <div class="text-body-1 text-medium-emphasis mt-3">
-                        {{
-                          props.mode === "create"
-                            ? "Set the path, method, and behavior first."
-                            : selectedEndpoint?.path
-                        }}
-                      </div>
-                    </div>
+          <v-textarea
+            auto-grow
+            :disabled="isPreviewingImport || isApplyingImport"
+            label="Bundle JSON"
+            :model-value="importText"
+            rows="8"
+            @update:model-value="importText = String($event ?? '')"
+          />
 
-                    <div class="d-flex flex-wrap align-start justify-end ga-2">
-                      <v-chip v-if="selectedEndpoint" color="primary" label size="small" variant="tonal">
-                        {{ selectedEndpoint.method }}
-                      </v-chip>
-                      <v-chip
-                        v-if="selectedEndpoint"
-                        :color="selectedEndpoint.enabled ? 'accent' : 'error'"
-                        label
-                        size="small"
-                        variant="tonal"
-                      >
-                        {{ selectedEndpoint.enabled ? "Live" : "Disabled" }}
-                      </v-chip>
-                      <v-chip v-if="selectedEndpoint?.category" color="secondary" label size="small" variant="tonal">
-                        {{ selectedEndpoint.category }}
-                      </v-chip>
-                    </div>
-                  </v-card-text>
-                </v-card>
+          <div v-if="importPreview" class="d-flex flex-column ga-3">
+            <div class="d-flex flex-wrap ga-2">
+              <v-chip color="primary" label size="small" variant="tonal">
+                {{ importPreview.summary.endpoint_count }} bundled
+              </v-chip>
+              <v-chip v-if="importPreview.summary.create_count" color="accent" label size="small" variant="tonal">
+                {{ importPreview.summary.create_count }} create
+              </v-chip>
+              <v-chip v-if="importPreview.summary.update_count" color="primary" label size="small" variant="tonal">
+                {{ importPreview.summary.update_count }} update
+              </v-chip>
+              <v-chip v-if="importPreview.summary.delete_count" color="error" label size="small" variant="tonal">
+                {{ importPreview.summary.delete_count }} delete
+              </v-chip>
+              <v-chip v-if="importPreview.summary.skip_count" color="secondary" label size="small" variant="tonal">
+                {{ importPreview.summary.skip_count }} skip
+              </v-chip>
+              <v-chip v-if="importPreview.summary.error_count" color="warning" label size="small" variant="tonal">
+                {{ importPreview.summary.error_count }} error
+              </v-chip>
+            </div>
 
-                <EndpointSettingsForm
-                  :available-categories="availableCategories"
-                  :available-tags="availableTags"
-                  :created-at="selectedEndpoint?.created_at"
-                  :draft="draft"
-                  :endpoint-id="selectedEndpoint?.id"
-                  :errors="fieldErrors"
-                  :is-creating="props.mode === 'create'"
-                  :is-saving="isSaving"
-                  :updated-at="selectedEndpoint?.updated_at"
-                  @change="applyDraftPatch"
-                  @delete="handleDelete"
-                  @duplicate="duplicateSelectedEndpoint"
-                  @open-schema="openSchemaStudio"
-                  @preview="openPreview"
-                  @submit="handleSave"
-                />
-              </div>
-            </v-slide-y-transition>
-          </template>
-        </div>
-      </div>
-    </v-col>
-  </v-row>
-
-  <v-dialog v-model="importDialog" max-width="960">
-    <v-card class="workspace-card">
-      <v-card-item>
-        <v-card-title>Import routes</v-card-title>
-        <v-card-subtitle>Preview a native Mockingbird bundle before applying it to this catalog.</v-card-subtitle>
-      </v-card-item>
-
-      <v-divider />
-
-      <v-card-text class="d-flex flex-column ga-4">
-        <v-alert v-if="importError" border="start" color="error" variant="tonal">
-          {{ importError }}
-        </v-alert>
-
-        <v-alert
-          v-else-if="importPreview?.has_errors"
-          border="start"
-          color="warning"
-          variant="tonal"
-        >
-          Review the bundle errors below before importing routes.
-        </v-alert>
-
-        <v-select
-          :disabled="isPreviewingImport || isApplyingImport"
-          :items="importModeOptions"
-          item-title="title"
-          item-value="value"
-          label="Import mode"
-          :model-value="importMode"
-          @update:model-value="importMode = ($event as EndpointImportMode | null) ?? 'upsert'"
-        />
-
-        <v-file-input
-          accept=".json,application/json"
-          clearable
-          :disabled="isPreviewingImport || isApplyingImport"
-          label="Bundle file"
-          :model-value="importFile"
-          prepend-icon="mdi-file-import-outline"
-          show-size
-          @update:model-value="handleImportFileChange"
-        />
-
-        <div class="text-caption text-medium-emphasis">Or paste the bundle JSON directly.</div>
-
-        <v-textarea
-          auto-grow
-          :disabled="isPreviewingImport || isApplyingImport"
-          label="Bundle JSON"
-          :model-value="importText"
-          rows="8"
-          @update:model-value="importText = String($event ?? '')"
-        />
-
-        <div v-if="importPreview" class="d-flex flex-column ga-3">
-          <div class="d-flex flex-wrap ga-2">
-            <v-chip color="primary" label size="small" variant="tonal">
-              {{ importPreview.summary.endpoint_count }} bundled
-            </v-chip>
-            <v-chip v-if="importPreview.summary.create_count" color="accent" label size="small" variant="tonal">
-              {{ importPreview.summary.create_count }} create
-            </v-chip>
-            <v-chip v-if="importPreview.summary.update_count" color="primary" label size="small" variant="tonal">
-              {{ importPreview.summary.update_count }} update
-            </v-chip>
-            <v-chip v-if="importPreview.summary.delete_count" color="error" label size="small" variant="tonal">
-              {{ importPreview.summary.delete_count }} delete
-            </v-chip>
-            <v-chip v-if="importPreview.summary.skip_count" color="secondary" label size="small" variant="tonal">
-              {{ importPreview.summary.skip_count }} skip
-            </v-chip>
-            <v-chip v-if="importPreview.summary.error_count" color="warning" label size="small" variant="tonal">
-              {{ importPreview.summary.error_count }} error
-            </v-chip>
-          </div>
-
-          <div class="import-operation-list d-flex flex-column ga-2">
-            <v-sheet
-              v-for="operation in importPreview.operations"
-              :key="`${operation.action}:${operation.method}:${operation.path}:${operation.name}`"
-              class="import-operation-row pa-3"
-              rounded="lg"
-            >
-              <div class="d-flex flex-wrap align-center justify-space-between ga-3">
-                <div class="d-flex flex-wrap align-center ga-2">
-                  <v-chip
-                    :color="importOperationColor(operation.action)"
-                    label
-                    size="small"
-                    variant="tonal"
-                  >
-                    {{ importOperationLabel(operation.action) }}
-                  </v-chip>
-                  <v-chip label size="small" variant="outlined">{{ operation.method }}</v-chip>
-                  <span class="font-weight-medium">{{ operation.name }}</span>
+            <div class="import-operation-list d-flex flex-column ga-2">
+              <v-sheet
+                v-for="operation in importPreview.operations"
+                :key="`${operation.action}:${operation.method}:${operation.path}:${operation.name}`"
+                class="import-operation-row pa-3"
+                rounded="lg"
+              >
+                <div class="d-flex flex-wrap align-center justify-space-between ga-3">
+                  <div class="d-flex flex-wrap align-center ga-2">
+                    <v-chip
+                      :color="importOperationColor(operation.action)"
+                      label
+                      size="small"
+                      variant="tonal"
+                    >
+                      {{ importOperationLabel(operation.action) }}
+                    </v-chip>
+                    <v-chip label size="small" variant="outlined">{{ operation.method }}</v-chip>
+                    <span class="font-weight-medium">{{ operation.name }}</span>
+                  </div>
+                  <code>{{ operation.path }}</code>
                 </div>
-                <code>{{ operation.path }}</code>
-              </div>
 
-              <div v-if="operation.detail" class="text-body-2 text-medium-emphasis mt-2">
-                {{ operation.detail }}
-              </div>
-            </v-sheet>
+                <div v-if="operation.detail" class="text-body-2 text-medium-emphasis mt-2">
+                  {{ operation.detail }}
+                </div>
+              </v-sheet>
+            </div>
           </div>
-        </div>
-      </v-card-text>
+        </v-card-text>
 
-      <v-divider />
+        <v-divider />
 
-      <v-card-actions class="justify-end">
-        <v-btn variant="text" @click="importDialog = false">Close</v-btn>
-        <v-btn
-          :loading="isPreviewingImport"
-          prepend-icon="mdi-clipboard-search-outline"
-          variant="text"
-          @click="previewImportRoutes"
-        >
-          Preview import
-        </v-btn>
-        <v-btn
-          color="primary"
-          :disabled="!canApplyImport"
-          :loading="isApplyingImport"
-          prepend-icon="mdi-upload"
-          @click="applyImportedRoutes"
-        >
-          Import routes
-        </v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+        <v-card-actions class="justify-end">
+          <v-btn variant="text" @click="importDialog = false">Close</v-btn>
+          <v-btn
+            :loading="isPreviewingImport"
+            prepend-icon="mdi-clipboard-search-outline"
+            variant="text"
+            @click="previewImportRoutes"
+          >
+            Preview import
+          </v-btn>
+          <v-btn
+            color="primary"
+            :disabled="!canApplyImport"
+            :loading="isApplyingImport"
+            prepend-icon="mdi-upload"
+            @click="applyImportedRoutes"
+          >
+            Import routes
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+  </div>
 </template>
 
 <style scoped>

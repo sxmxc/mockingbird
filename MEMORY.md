@@ -19,6 +19,10 @@ Provide a Docker-first platform to define and serve configurable mock APIs with 
 - Admin auth now uses DB-backed dashboard users plus bearer session tokens, with a one-time bootstrap account created on first init.
 - OpenAPI can be rebuilt on every request; caching is secondary.
 - `response_schema` is now the single source of truth for response shape and mock behavior via `x-mock` extensions.
+- Phase 1 response templating is scoped as an optional `x-mock.template` overlay on response `string` nodes, layered onto the existing `x-mock` contract instead of replacing the drag-and-drop schema studio with a raw template editor.
+- Phase 1 template context is intentionally limited to `value`, `request.path`, `request.query`, and `request.body`; response-field references, loops, and a raw Handlebars/Liquid-style surface are deferred until the simpler request-aware pass lands cleanly.
+- The schema-studio roadmap is now pivoting toward a canvas-first architecture, with `Vue Flow` as the leading candidate, while keeping the existing JSON Schema-backed builder contract stable during the transition.
+- Admin access control now extends the existing dashboard-user system with explicit roles and permission bundles instead of introducing a second admin-user model.
 
 ## Current Status Snapshot
 - Docker Compose starts a working Postgres, FastAPI API, and Vite admin app with `make up`.
@@ -39,6 +43,14 @@ Provide a Docker-first platform to define and serve configurable mock APIs with 
 - The repo now also includes a local production-like Compose path through `docker-compose.prod-local.yml` plus `make up-prod-local`, which builds the local `runtime` targets, serves the admin app through Nginx, drops backend hot reload, and recreates the same local Compose stack in place while reusing the dev database volume.
 - The frontend now runs on Vue + Vuetify, with a dedicated login flow, protected catalog/settings routes, a dedicated schema studio route, light/dark theme toggle, catalog search/filtering, and a Vuetify-first drag-and-drop builder surface.
 - The admin frontend now stores bearer session tokens instead of raw passwords, redirects bootstrap/reset accounts into a mandatory password-rotation screen, and exposes a superuser-only dashboard-user management surface.
+- Admin users now carry explicit `viewer`, `editor`, or `superuser` roles; the backend returns derived permission bundles in auth/session payloads, the API enforces read/write/preview/user-management boundaries from those permissions, and the admin UI hides route-management actions when the signed-in role is read-only.
+- The RBAC Alembic rollout now backfills `adminuser.role` with dialect-safe SQLAlchemy updates, so existing Postgres dev volumes upgrade cleanly instead of failing on the boolean `is_superuser` backfill step.
+- The admin auth UX now splits personal account work from global access control: the top bar uses a traditional username-plus-avatar account dropdown, `/account/profile` owns self-service username/full-name/email/avatar/password changes via dedicated account endpoints, and `/users` owns superuser-only admin-user management with searchable directory rows, richer account metadata, and role/access controls.
+- The public landing page now embeds its live reference payload through an escaped JSON script block instead of raw inline assignment, so endpoint data cannot break out of the page bootstrap script and execute stored XSS in the public shell.
+- Public mock route matching now escapes static path text before translating `{param}` placeholders, and the async catchall offloads its sync DB lookup plus sample-generation work to worker threads so literal path matching stays correct without blocking the event loop.
+- Admin login now has baseline brute-force protection: repeated failures can temporarily lock an admin account, the API also throttles by client IP, and failed/blocked/successful login attempts are written to the backend audit logs.
+- The API/public landing responses now emit baseline browser hardening headers, the admin runtime Nginx template mirrors those headers, and the Vite dev server now serves the admin SPA with matching header coverage during local development.
+- The route workspace now renders through a single view root again, which fixes the blank-screen transition bug that appeared when navigating from the routes page into profile or schema-editor routes.
 - The admin catalog/settings flow now supports endpoint duplication, opening a prefilled disabled copy with adjusted name/slug/path so teams can branch an existing route without immediately shadowing the live one.
 - The admin endpoint workspace now keeps its shared shell mounted across browse/create/edit route changes, so switching records animates the right-hand content panel instead of fading the whole page.
 - The admin catalog now refreshes in the background every 30 seconds while visible, also resyncs on focus/online once stale, keeps the last good route list rendered on refresh failures, and preserves the currently selected route row while its settings draft is dirty so unsaved edits are not clobbered.
@@ -95,12 +107,22 @@ Provide a Docker-first platform to define and serve configurable mock APIs with 
 - The API runtime version now comes from `APP_VERSION`, which lets release images stamp OpenAPI metadata with the published version, and the admin runtime image serves its built SPA through Nginx with a configurable `API_UPSTREAM`.
 - The dependency audit pass now targets Python 3.12 and Node 24 across Docker, local version files, and GitHub Actions; the backend runs on FastAPI 0.135 + Pydantic 2 + SQLModel 0.0.37, the frontend runs on Vite 8, workflow badges live in the README, and both `pip-audit` and `npm audit` are currently clean.
 - The admin frontend now also uses ESLint 10 flat config with current Vue parser/plugin packages, and `npm ci` no longer emits the old `eslint` / `rimraf` / `glob` / `inflight` deprecation warnings during container startup.
+- Frontend tests now stub CSS imports in Vitest, which removes the repeated Vuetify/jsdom `Could not parse CSS stylesheet` warning spam without changing the behavioral component coverage.
+- The repo now includes a dedicated response-templating scope doc at `docs/response-templating.md`, which keeps templating node-scoped, builder-first, and request-aware.
+- Backend response generation now also supports request-aware string templating through `x-mock.template`, and both the admin preview API and public runtime can render those templates against path/query/body input context.
+- The response schema studio now round-trips `x-mock.template` on string fields, validates request-aware template tokens in the browser, offers helper chips for `{{value}}` plus request path/query/body tokens, and lets the live preview rail send editable path/query/body context back through the authenticated preview API.
+- The schema studio now keeps the left rail focused on builder tools, places field settings and preview-input forms side-by-side beneath the canvas on desktop, groups field settings into lighter Basics/Behavior/Constraints/Template/Structure sections, shows query-parameter pills alongside path-value pills in the response route-values palette without making those query pills draggable, lets plus anchors open a field-type insert menu in addition to drag/drop, uses dedicated drag handles instead of dragging the whole node pill, supports branch collapse/expand for object and array nodes, makes editor alerts dismissible, only enables `Save schema` for dirty changes, and keeps selected-node emphasis focused on the pill instead of washing the whole row.
+- Admin users now also carry optional `full_name`, `email`, and `avatar_url` fields, account menus show the username with a profile image in the top bar while falling back to Gravatar when no custom image is set, and raw Alembic CLI runs now resolve the configured database URL instead of silently falling back to the stale SQLite default from `alembic.ini`.
+- The admin shell now keeps the fixed top bar focused on brand, primary navigation, and account controls, while the `Users` page is directory-first with summary cards, search/filter controls, and dialog-based add/edit flows instead of a permanently open create form; the custom shell styling now uses theme-aware contrast values so both light and dark mode remain legible.
+- Vuetify MCP-verified cleanup removed the current admin-console deprecations by switching runtime theme sync to `theme.change(...)` and replacing deprecated `v-row dense` usage with `density=\"comfortable\"`.
+- The current connected pill-tree builder should now be treated as a transitional baseline rather than the long-term schema-editor architecture; near-term frontend work is expected to prototype a `Vue Flow` canvas while preserving the current backend schema contract and familiar inspector/preview workflow.
 - The GitHub wiki now lives in the separate `mockingbird.wiki` repository as a curated user/developer handbook, while `README.md` and `docs/` remain the canonical source of truth.
 
 ## Known Risks
 - Live OpenAPI generation may become slow if not cached.
 - Drag-and-drop schema editing is meaningfully more complex than the old textarea editor, so tree-state regressions are still worth watching closely.
 - The new pill-tree canvas depends on small icon-only insertion anchors, so future UX passes should keep keyboard/accessibility affordances in view while refining drag/drop.
+- A canvas-first pivot could make JSON Schema editing feel too abstract if node placement and edges drift away from the stored parent/child contract, so prototypes should keep the mapping between canvas visuals and schema structure obvious.
 - Semantic value-type drops can intentionally coerce scalar leaf types to a compatible schema type, so future UX changes should keep those mappings obvious in both the canvas and inspector.
 - The builder now uses custom drag images for pills, so future drag/drop changes should preserve that feel instead of accidentally falling back to the browser's default clipped drag screenshot.
 - Arrays still serialize to one JSON Schema `items` shape, so the editor should keep reinforcing that “one item template” model instead of exposing generic object-style child language around array authoring.
@@ -108,17 +130,18 @@ Provide a Docker-first platform to define and serve configurable mock APIs with 
 - The public landing page currently uses lightweight polling for the live quick reference rather than websockets or SSE.
 - The public landing page hero still depends on approved artwork being dropped into `apps/api/static/landing/hero.*`.
 - Admin UI and backend need to stay in sync on model schemas.
+- `AdminUser` now also tracks failed-login counters plus lockout timestamps, so future auth changes should keep the rate-limit/lockout migration path and audit logging behavior aligned across the API, tests, and docs.
 - Fresh installs still need an operator to capture the bootstrap password from `ADMIN_BOOTSTRAP_PASSWORD` or the API startup logs and rotate it promptly.
 - Request parameter modeling currently supports flat scalar/enum path and query fields only; nested object/array parameters and advanced OpenAPI serialization styles are still out of scope.
 - Slugs remain part of the backend endpoint model for seeding and bookkeeping, so future imports/scripts should keep treating them as internal identifiers rather than reintroducing them into the user-facing route form.
 - Catalog imports currently match existing routes by normalized `method + path`, so path/method renames behave like new routes unless operators use `replace_all`.
-- Vitest/jsdom still prints repeated `Could not parse CSS stylesheet` warnings when rendering Vuetify-heavy components, even though the frontend tests pass.
-- The `SchemaEditorWorkspace` Vitest file can still be annoyingly sticky under Vuetify/jsdom noise; utility tests, lint, and typecheck are currently reliable, but the component suite remains part of the broader CSS-noise cleanup task.
 - Local arm64 validation works through a temporary buildx/QEMU builder, but it is meaningfully slower than native amd64 builds because the admin runtime image has to cross-compile the full Vite bundle.
 
 ## Notes for Next Agent
 - Keep tasks updated in `TASKS.md` as progress is made.
-- Focus next on richer simulation UX around latency/error scenarios and the lingering Vuetify/jsdom CSS parse noise now that request parameter modeling is in place.
+- Focus next on prototyping the `Vue Flow`-based schema canvas architecture while preserving the existing schema contract now that RBAC and the account/users split have landed.
+- Any future response-authoring experiments should preserve the schema studio's drag/drop pill-tree workflow, `x-builder.order` ordering, and the array `Item shape` model instead of falling back to a raw template-text editor.
+- If templating changes again, browser QA should verify that path/query/body-backed template previews in the schema studio still match the public runtime output.
 - Browser QA for catalog refresh should confirm that background sync updates non-selected routes, retains the last good list on refresh errors, and does not reset a dirty selected route form mid-edit.
 - Browser QA for schema-studio reorder should use the row-level plus anchors for "insert before" moves and the inline plus anchors for "append into container" moves; both paths are now covered by the same drag payload contract.
 - Browser QA for schema-studio append-at-end should use the dashed tail anchors under object branches, while array tail anchors intentionally replace the one repeated item shape instead of adding tuple-array siblings.
@@ -139,6 +162,7 @@ Provide a Docker-first platform to define and serve configurable mock APIs with 
 - The admin frontend now targets Node 24+ locally, and the repo root includes `.node-version` / `.python-version` files to keep local runtimes aligned with CI and Docker.
 - Response schemas may contain internal `x-mock` and `x-builder` keys for generation and tree ordering; public OpenAPI strips those keys before publishing.
 - Alembic lives under `apps/api/migrations/`, and both `start.sh` and `scripts/seed.sh` run the migration bootstrap before serving or seeding.
+- Manual Alembic CLI runs now also inherit the configured DB URL from env/settings through `apps/api/migrations/env.py`, so `alembic upgrade head` stays aligned with the same Postgres target that startup uses.
 - Active admin sessions now live in `sessionStorage`, while the explicit remember-me path additionally copies a bearer session token to `localStorage` so page refreshes stay smooth without persisting the raw password in the browser.
 - Admin bootstrap now uses `ADMIN_BOOTSTRAP_USERNAME` / `ADMIN_BOOTSTRAP_PASSWORD`; leaving the password blank generates a one-time value in the API startup logs and forces a password change on first sign-in.
 - Vuetify MCP is configured at the repo root via `.mcp.json`, and the frontend package exposes `npm run mcp:vuetify` plus `npm run mcp:vuetify:http` for local MCP usage.

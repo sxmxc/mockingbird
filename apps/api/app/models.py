@@ -8,6 +8,7 @@ from pydantic import ConfigDict
 from sqlalchemy import Boolean, Column, JSON as SAJSON, String
 from sqlmodel import Field, SQLModel
 
+from app.rbac import AdminRole
 from app.time_utils import utc_now
 
 
@@ -48,9 +49,19 @@ class AdminUser(SQLModel, table=True):
     username: str = Field(
         sa_column=Column(String(128), nullable=False, unique=True, index=True),
     )
+    full_name: Optional[str] = Field(default=None, sa_column=Column(String(160), nullable=True))
+    email: Optional[str] = Field(default=None, sa_column=Column(String(320), nullable=True))
+    avatar_url: Optional[str] = Field(default=None, sa_column=Column(String(1024), nullable=True))
     password_hash: str = Field(sa_column=Column(String(512), nullable=False))
     is_active: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default="1"))
+    role: AdminRole = Field(
+        default=AdminRole.editor,
+        sa_column=Column(String(32), nullable=False, server_default=AdminRole.editor.value),
+    )
     is_superuser: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default="0"))
+    failed_login_attempts: int = Field(default=0, nullable=False)
+    last_failed_login_at: Optional[datetime] = None
+    locked_until: Optional[datetime] = None
     must_change_password: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default="0"))
     last_login_at: Optional[datetime] = None
     password_changed_at: Optional[datetime] = None

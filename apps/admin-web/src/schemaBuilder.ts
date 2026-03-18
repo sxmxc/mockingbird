@@ -1,5 +1,6 @@
 import type { JsonObject, JsonValue } from "./types/endpoints";
 import type { RequestParameterDefinition } from "./utils/requestSchema";
+import { validateResponseTemplate } from "./utils/responseTemplates";
 
 export type BuilderNodeType = "object" | "array" | "string" | "integer" | "number" | "boolean" | "enum";
 export type BuilderScope = "request" | "response";
@@ -25,6 +26,7 @@ export interface SchemaBuilderNode {
   name: string;
   parameterSource: string | null;
   required: boolean;
+  template: string;
   type: BuilderNodeType;
 }
 
@@ -370,6 +372,7 @@ export function createNode(
     name: overrides.name ?? defaultName(nextType),
     parameterSource: overrides.parameterSource ?? null,
     required: overrides.required ?? false,
+    template: overrides.template ?? "",
     type: nextType,
   };
 }
@@ -609,6 +612,7 @@ export function applyValueType(
             children: [],
             item: null,
             parameterSource: null,
+            template: nextType === "string" ? node.template : "",
           }
         : createNode(nextType, scope, {
             id: node.id,
@@ -616,6 +620,7 @@ export function applyValueType(
             required: node.required,
             description: node.description,
             mode: scope === "response" ? nextMode : "generate",
+            template: nextType === "string" ? node.template : "",
           });
 
     if (nextType !== "string") {
@@ -625,6 +630,7 @@ export function applyValueType(
         generator: normalized,
         format: "",
         parameterSource: null,
+        template: "",
       };
     }
 
@@ -678,6 +684,7 @@ export function applyPathParameter(
             fixedValue: cloneJsonValue(node.fixedValue),
             children: [],
             item: null,
+            template: nextType === "string" ? node.template : "",
           }
         : createNode(nextType, scope, {
             id: node.id,
@@ -685,6 +692,7 @@ export function applyPathParameter(
             required: node.required,
             description: node.description,
             mode: "generate",
+            template: nextType === "string" ? node.template : "",
           });
 
     const defaultStringMaxLength = recommendedMaxLengthForValueType(nextNode.generator);
@@ -739,6 +747,7 @@ export function applyPathParameter(
           ? linkedParameter.enumValues.map((value) => value.trim()).filter(Boolean)
           : nextNode.enumValues,
       parameterSource: trimmedParameter,
+      template: nextType === "string" ? nextNode.template : "",
     };
   });
 }
@@ -751,6 +760,7 @@ export function resetNodeType(tree: SchemaBuilderNode, nodeId: string, nextType:
       required: node.required,
       description: node.description,
       mode: scope === "response" ? node.mode : "generate",
+      template: nextType === "string" ? node.template : "",
     });
     return rebuilt;
   });
@@ -1040,6 +1050,7 @@ export function schemaToTree(schema: JsonObject | null | undefined, scope: Build
       enumValues: Array.isArray(rawSchema.enum) ? rawSchema.enum.map(String) : [],
       fixedValue:
         scope === "response" ? normalizeFixedValue(type, mockConfig?.value) : defaultFixedValue(type),
+      template: scope === "response" && type === "string" && typeof mockConfig?.template === "string" ? mockConfig.template : "",
     });
 
     if (type === "object") {
@@ -1142,6 +1153,9 @@ export function treeToSchema(tree: SchemaBuilderNode, scope: BuilderScope): Json
         mockConfig.type = node.generator;
         mockConfig.generator = node.generator;
       }
+      if (node.type === "string" && node.template.trim()) {
+        mockConfig.template = node.template.trim();
+      }
       base["x-mock"] = mockConfig;
     }
 
@@ -1151,7 +1165,11 @@ export function treeToSchema(tree: SchemaBuilderNode, scope: BuilderScope): Json
   return buildSchema(tree);
 }
 
-function validateNode(node: SchemaBuilderNode, root: boolean): string | null {
+function validateNode(
+  node: SchemaBuilderNode,
+  root: boolean,
+  options: { pathParameterNames?: string[] } = {},
+): string | null {
   if (!root && !node.name.trim()) {
     return "Every field needs a name before you can save this schema.";
   }
@@ -1167,7 +1185,7 @@ function validateNode(node: SchemaBuilderNode, root: boolean): string | null {
         return `Duplicate field name "${trimmedName}" found in the same object.`;
       }
       seen.add(trimmedName);
-      const childError = validateNode(child, false);
+      const childError = validateNode(child, false, options);
       if (childError) {
         return childError;
       }
@@ -1178,18 +1196,27 @@ function validateNode(node: SchemaBuilderNode, root: boolean): string | null {
     if (!node.item) {
       return "Arrays need an item shape before you can save this schema.";
     }
-    return validateNode(node.item, false);
+    return validateNode(node.item, false, options);
   }
 
   if (node.type === "enum" && node.enumValues.filter(Boolean).length === 0) {
     return "Enum fields need at least one option.";
   }
 
+  if (node.type === "string" && node.template.trim()) {
+    const templateError = validateResponseTemplate(node.template, {
+      pathParameterNames: options.pathParameterNames,
+    });
+    if (templateError) {
+      return node.name.trim() ? `${node.name.trim()}: ${templateError}` : templateError;
+    }
+  }
+
   return null;
 }
 
-export function validateTree(tree: SchemaBuilderNode): string | null {
-  return validateNode(tree, true);
+export function validateTree(tree: SchemaBuilderNode, options: { pathParameterNames?: string[] } = {}): string | null {
+  return validateNode(tree, true, options);
 }
 
 export function canAcceptChildren(node: SchemaBuilderNode): boolean {

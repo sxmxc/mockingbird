@@ -1,6 +1,7 @@
 import { createRootNode, schemaToTree, treeToSchema, validateTree } from "../schemaBuilder";
 import type { BuilderScope } from "../schemaBuilder";
 import type { Endpoint, EndpointDraft, EndpointPayload, JsonObject, JsonValue } from "../types/endpoints";
+import { extractPathParameters } from "./pathParameters";
 
 function createDefaultSchema(scope: BuilderScope): JsonObject {
   return treeToSchema(createRootNode(scope), scope);
@@ -210,7 +211,9 @@ export function buildPayload(draft: EndpointDraft): { errors: Record<string, str
     errors.request_schema = requestTreeError;
   }
 
-  const responseTreeError = validateTree(schemaToTree(draft.response_schema, "response"));
+  const responseTreeError = validateTree(schemaToTree(draft.response_schema, "response"), {
+    pathParameterNames: extractPathParameters(draft.path),
+  });
   if (responseTreeError) {
     errors.response_schema = responseTreeError;
   }

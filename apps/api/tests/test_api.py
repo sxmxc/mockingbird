@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 import app.db as db_module
+import app.services.admin_auth as admin_auth_module
 from app.db import create_db_and_tables, engine
 from app.main import app
 from app.models import EndpointDefinition
@@ -36,6 +37,7 @@ def _reset_db() -> None:
     if TEST_DB_PATH.exists():
         TEST_DB_PATH.unlink()
     create_db_and_tables()
+    admin_auth_module.reset_login_rate_limits()
 
 
 def _bearer_headers(token: str) -> dict[str, str]:
@@ -81,6 +83,42 @@ def _login_headers(
     raise AssertionError(f"Unable to authenticate admin user '{username}' with the provided test passwords.")
 
 
+def _endpoint_payload(*, name: str, path: str, method: str = "GET") -> dict:
+    return {
+        "name": name,
+        "method": method,
+        "path": path,
+        "category": "testing",
+        "tags": ["testing"],
+        "summary": f"{name} summary",
+        "description": f"{name} description",
+        "enabled": True,
+        "auth_mode": "none",
+        "request_schema": {},
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "x-mock": {
+                        "mode": "fixed",
+                        "value": "ok",
+                        "options": {},
+                    },
+                }
+            },
+            "required": ["status"],
+            "x-builder": {"order": ["status"]},
+            "x-mock": {"mode": "generate"},
+        },
+        "success_status_code": 200,
+        "error_rate": 0.0,
+        "latency_min_ms": 0,
+        "latency_max_ms": 0,
+        "seed_key": None,
+    }
+
+
 @pytest.fixture
 def seeded_db():
     _reset_db()
@@ -104,6 +142,14 @@ def test_create_db_and_tables_uses_alembic_schema():
     assert "seed_key" in columns
     assert "example_template" not in columns
     assert "response_mode" not in columns
+    admin_columns = {column["name"] for column in inspector.get_columns("adminuser")}
+    assert "role" in admin_columns
+    assert "full_name" in admin_columns
+    assert "email" in admin_columns
+    assert "avatar_url" in admin_columns
+    assert "failed_login_attempts" in admin_columns
+    assert "last_failed_login_at" in admin_columns
+    assert "locked_until" in admin_columns
 
 
 def test_openapi_endpoint(seeded_db):
@@ -157,6 +203,47 @@ def test_public_landing_reference_and_brand_asset(seeded_db):
     assert asset.headers["content-type"].startswith("image/svg+xml")
 
 
+def test_public_landing_escapes_embedded_reference_payload(empty_db):
+    client = TestClient(app)
+    headers = _login_headers(client)
+
+    create_response = client.post(
+        "/api/admin/endpoints",
+        json=_endpoint_payload(
+            name='</script><script>window.__MB_XSS__="pwned"</script>',
+            path="/api/xss-test.+",
+        ),
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+
+    landing = client.get("/")
+    assert landing.status_code == 200
+    assert '<script id="initial-reference-data" type="application/json">' in landing.text
+    assert "\\u003c/script\\u003e\\u003cscript\\u003ewindow.__MB_XSS__" in landing.text
+    assert '</script><script>window.__MB_XSS__="pwned"</script>' not in landing.text
+
+
+def test_security_headers_are_present_on_public_and_api_responses(seeded_db):
+    client = TestClient(app)
+
+    landing = client.get("/")
+    assert landing.headers["x-content-type-options"] == "nosniff"
+    assert landing.headers["x-frame-options"] == "DENY"
+    assert landing.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert "content-security-policy" in landing.headers
+
+    reference = client.get("/api/reference.json")
+    assert reference.headers["x-content-type-options"] == "nosniff"
+    assert reference.headers["x-frame-options"] == "DENY"
+    assert reference.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert reference.headers["content-security-policy"] == "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+
+    secure_client = TestClient(app, base_url="https://testserver")
+    secure_reference = secure_client.get("/api/reference.json")
+    assert secure_reference.headers["strict-transport-security"] == "max-age=31536000; includeSubDomains"
+
+
 def test_admin_endpoints_require_admin_session(empty_db):
     client = TestClient(app)
     response = client.get("/api/admin/endpoints")
@@ -208,6 +295,111 @@ def test_bootstrap_password_must_be_rotated_before_admin_access(empty_db):
     assert stale_login_response.status_code == 401
 
 
+def test_admin_account_profile_endpoints_update_the_current_user(empty_db):
+    client = TestClient(app)
+    headers = _login_headers(client)
+
+    read_response = client.get("/api/admin/account/me", headers=headers)
+    assert read_response.status_code == 200
+    assert read_response.json()["username"] == "admin"
+
+    update_response = client.put(
+        "/api/admin/account/me",
+        json={
+            "username": "admin-renamed",
+            "full_name": "Admin Example",
+            "email": "admin@example.com",
+            "avatar_url": "https://cdn.example.com/admin.png",
+        },
+        headers=headers,
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["user"]["username"] == "admin-renamed"
+    assert update_response.json()["user"]["full_name"] == "Admin Example"
+    assert update_response.json()["user"]["email"] == "admin@example.com"
+    assert update_response.json()["user"]["avatar_url"] == "https://cdn.example.com/admin.png"
+    assert "gravatar_url" in update_response.json()["user"]
+
+    renamed_login_response = client.post(
+        "/api/admin/auth/login",
+        json={
+            "username": "admin-renamed",
+            "password": ACTIVE_ADMIN_PASSWORD,
+            "remember_me": False,
+        },
+    )
+    assert renamed_login_response.status_code == 200
+
+    partial_update_response = client.put(
+        "/api/admin/account/me",
+        json={"full_name": "Renamed Admin"},
+        headers=headers,
+    )
+    assert partial_update_response.status_code == 200
+    assert partial_update_response.json()["user"]["username"] == "admin-renamed"
+    assert partial_update_response.json()["user"]["full_name"] == "Renamed Admin"
+
+
+def test_admin_login_locks_user_after_repeated_failures(empty_db, monkeypatch: pytest.MonkeyPatch):
+    client = TestClient(app)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_max_attempts", 2)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_ip_max_attempts", 99)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_window_seconds", 300)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_lockout_seconds", 60)
+
+    for _ in range(2):
+        failed_response = client.post(
+            "/api/admin/auth/login",
+            json={
+                "username": "admin",
+                "password": "wrong-password",
+                "remember_me": False,
+            },
+        )
+        assert failed_response.status_code == 401
+
+    locked_response = client.post(
+        "/api/admin/auth/login",
+        json={
+            "username": "admin",
+            "password": INITIAL_ADMIN_PASSWORD,
+            "remember_me": False,
+        },
+    )
+    assert locked_response.status_code == 429
+    assert int(locked_response.headers["retry-after"]) >= 1
+
+
+def test_admin_login_throttles_repeated_failures_from_the_same_ip(empty_db, monkeypatch: pytest.MonkeyPatch):
+    client = TestClient(app)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_max_attempts", 99)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_ip_max_attempts", 2)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_window_seconds", 300)
+    monkeypatch.setattr(admin_auth_module.settings, "admin_login_lockout_seconds", 60)
+
+    for _ in range(2):
+        failed_response = client.post(
+            "/api/admin/auth/login",
+            json={
+                "username": "unknown-user",
+                "password": "wrong-password",
+                "remember_me": False,
+            },
+        )
+        assert failed_response.status_code == 401
+
+    throttled_response = client.post(
+        "/api/admin/auth/login",
+        json={
+            "username": "unknown-user",
+            "password": "wrong-password",
+            "remember_me": False,
+        },
+    )
+    assert throttled_response.status_code == 429
+    assert int(throttled_response.headers["retry-after"]) >= 1
+
+
 def test_get_session_dependency_closes_session_context():
     events: list[tuple[str, object | None]] = []
 
@@ -247,8 +439,11 @@ def test_superusers_can_manage_dashboard_users(empty_db):
         "/api/admin/users",
         json={
             "username": "editor",
+            "full_name": "Editor Person",
+            "email": "editor@example.com",
+            "avatar_url": "https://cdn.example.com/editor.png",
             "password": "editor-password-123",
-            "is_superuser": False,
+            "role": "editor",
             "must_change_password": True,
         },
         headers=headers,
@@ -256,17 +451,30 @@ def test_superusers_can_manage_dashboard_users(empty_db):
     assert create_response.status_code == 201
     created_user = create_response.json()
     assert created_user["username"] == "editor"
+    assert created_user["full_name"] == "Editor Person"
+    assert created_user["email"] == "editor@example.com"
+    assert created_user["avatar_url"] == "https://cdn.example.com/editor.png"
+    assert "gravatar_url" in created_user
+    assert created_user["role"] == "editor"
+    assert "routes.write" in created_user["permissions"]
     assert created_user["must_change_password"] is True
 
     list_response = client.get("/api/admin/users", headers=headers)
     assert list_response.status_code == 200
     assert {user["username"] for user in list_response.json()} >= {"admin", "editor"}
 
+    read_response = client.get(f"/api/admin/users/{created_user['id']}", headers=headers)
+    assert read_response.status_code == 200
+    assert read_response.json()["username"] == "editor"
+
     update_response = client.put(
         f"/api/admin/users/{created_user['id']}",
         json={
             "is_active": False,
             "must_change_password": False,
+            "full_name": "Editor Person Updated",
+            "email": "editor-updated@example.com",
+            "avatar_url": "https://cdn.example.com/editor-updated.png",
         },
         headers=headers,
     )
@@ -274,6 +482,9 @@ def test_superusers_can_manage_dashboard_users(empty_db):
     updated_user = update_response.json()
     assert updated_user["is_active"] is False
     assert updated_user["must_change_password"] is False
+    assert updated_user["full_name"] == "Editor Person Updated"
+    assert updated_user["email"] == "editor-updated@example.com"
+    assert updated_user["avatar_url"] == "https://cdn.example.com/editor-updated.png"
 
     delete_response = client.delete(f"/api/admin/users/{created_user['id']}", headers=headers)
     assert delete_response.status_code == 204
@@ -288,7 +499,7 @@ def test_deleting_dashboard_user_removes_historical_sessions(empty_db):
         json={
             "username": "audited-user",
             "password": "audited-user-password-123",
-            "is_superuser": False,
+            "role": "editor",
             "must_change_password": False,
         },
         headers=admin_headers,
@@ -311,6 +522,100 @@ def test_deleting_dashboard_user_removes_historical_sessions(empty_db):
     list_response = client.get("/api/admin/users", headers=admin_headers)
     assert list_response.status_code == 200
     assert all(user["id"] != created_user["id"] for user in list_response.json())
+
+
+def test_roles_gate_admin_api_access(empty_db):
+    client = TestClient(app)
+    admin_headers = _login_headers(client)
+
+    viewer_create_response = client.post(
+        "/api/admin/users",
+        json={
+            "username": "viewer-user",
+            "password": "viewer-password-123",
+            "role": "viewer",
+            "must_change_password": False,
+        },
+        headers=admin_headers,
+    )
+    assert viewer_create_response.status_code == 201
+    assert viewer_create_response.json()["permissions"] == ["routes.read", "routes.preview"]
+
+    editor_create_response = client.post(
+        "/api/admin/users",
+        json={
+            "username": "editor-user",
+            "password": "editor-password-123",
+            "role": "editor",
+            "must_change_password": False,
+        },
+        headers=admin_headers,
+    )
+    assert editor_create_response.status_code == 201
+    assert "routes.write" in editor_create_response.json()["permissions"]
+
+    viewer_headers = _login_headers(
+        client,
+        username="viewer-user",
+        candidate_passwords=("viewer-password-123",),
+    )
+    editor_headers = _login_headers(
+        client,
+        username="editor-user",
+        candidate_passwords=("editor-password-123",),
+    )
+
+    viewer_list_response = client.get("/api/admin/endpoints", headers=viewer_headers)
+    assert viewer_list_response.status_code == 200
+
+    viewer_preview_response = client.post(
+        "/api/admin/endpoints/preview-response",
+        json={
+            "response_schema": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "x-mock": {"mode": "fixed", "value": "ok", "options": {}},
+                    }
+                },
+                "required": ["status"],
+                "x-builder": {"order": ["status"]},
+                "x-mock": {"mode": "generate"},
+            }
+        },
+        headers=viewer_headers,
+    )
+    assert viewer_preview_response.status_code == 200
+    assert viewer_preview_response.json()["preview"] == {"status": "ok"}
+
+    viewer_create_route_response = client.post(
+        "/api/admin/endpoints",
+        json=_endpoint_payload(name="Viewer route", path="/api/viewer-route"),
+        headers=viewer_headers,
+    )
+    assert viewer_create_route_response.status_code == 403
+    assert "cannot create, edit, import, or delete routes" in viewer_create_route_response.json()["detail"]
+
+    viewer_users_response = client.get("/api/admin/users", headers=viewer_headers)
+    assert viewer_users_response.status_code == 403
+
+    viewer_read_user_response = client.get("/api/admin/users/1", headers=viewer_headers)
+    assert viewer_read_user_response.status_code == 403
+
+    editor_list_response = client.get("/api/admin/endpoints", headers=editor_headers)
+    assert editor_list_response.status_code == 200
+
+    editor_create_route_response = client.post(
+        "/api/admin/endpoints",
+        json=_endpoint_payload(name="Editor route", path="/api/editor-route"),
+        headers=editor_headers,
+    )
+    assert editor_create_route_response.status_code == 201
+    assert editor_create_route_response.json()["name"] == "Editor route"
+
+    editor_users_response = client.get("/api/admin/users", headers=editor_headers)
+    assert editor_users_response.status_code == 403
 
 
 def test_private_admin_paths_cannot_be_created_as_public_mocks(empty_db):
@@ -353,6 +658,27 @@ def test_private_admin_paths_cannot_be_created_as_public_mocks(empty_db):
 
     assert response.status_code == 422
     assert "reserved for private admin routes" in response.json()["detail"]
+
+
+def test_public_route_matching_treats_saved_paths_as_literals(empty_db):
+    client = TestClient(app)
+    headers = _login_headers(client)
+
+    create_response = client.post(
+        "/api/admin/endpoints",
+        json=_endpoint_payload(name="Regex Literal", path="/api/regex-test.+"),
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+
+    literal_response = client.get("/api/regex-test.+")
+    assert literal_response.status_code == 200
+
+    fuzzy_response = client.get("/api/regex-testXYZ")
+    assert fuzzy_response.status_code == 404
+
+    child_response = client.get("/api/regex-test.+/child")
+    assert child_response.status_code == 404
 
 
 def test_admin_crud_lifecycle_supports_builder_extensions(empty_db):
@@ -714,6 +1040,55 @@ def test_preview_endpoint_upgrades_legacy_text_quotes_to_long_text(empty_db):
     assert len(preview["quote"]) > 64
 
 
+def test_preview_endpoint_can_render_request_aware_templates(empty_db):
+    client = TestClient(app)
+    headers = _login_headers(client)
+    response_schema = {
+        "type": "object",
+        "properties": {
+            "receipt": {
+                "type": "string",
+                "x-mock": {
+                    "mode": "fixed",
+                    "value": "approved",
+                    "options": {},
+                    "template": "order={{request.path.orderId}} status={{request.query.status}} email={{request.body.customer.email}} base={{value}} missing={{request.query.missing}}",
+                },
+            },
+            "slugLine": {
+                "type": "string",
+                "x-mock": {
+                    "mode": "generate",
+                    "type": "slug",
+                    "options": {"words": 2},
+                    "template": "slug={{value}}",
+                },
+            },
+        },
+        "required": ["receipt", "slugLine"],
+        "x-builder": {"order": ["receipt", "slugLine"]},
+        "x-mock": {"mode": "generate"},
+    }
+
+    response = client.post(
+        "/api/admin/endpoints/preview-response",
+        json={
+            "response_schema": response_schema,
+            "seed_key": "template-seed",
+            "path_parameters": {"orderId": "ord-123"},
+            "query_parameters": {"status": "queued"},
+            "request_body": {"customer": {"email": "alex@example.com"}},
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    preview = response.json()["preview"]
+    assert preview["receipt"] == "order=ord-123 status=queued email=alex@example.com base=approved missing="
+    assert preview["slugLine"].startswith("slug=")
+    assert len(preview["slugLine"]) > len("slug=")
+
+
 def test_runtime_dispatch_matches_seeded_endpoints(seeded_db):
     client = TestClient(app)
 
@@ -802,6 +1177,151 @@ def test_runtime_dispatch_can_echo_path_parameters_from_the_route(empty_db):
     runtime_response = client.get("/api/orders/order-123")
     assert runtime_response.status_code == 200
     assert runtime_response.json() == {"orderId": "order-123"}
+
+
+def test_runtime_dispatch_can_render_request_aware_templates(empty_db):
+    client = TestClient(app)
+    headers = _login_headers(client)
+
+    create_response = client.post(
+        "/api/admin/endpoints",
+        json={
+            "name": "Create order email",
+            "method": "POST",
+            "path": "/api/orders/{orderId}/emails",
+            "category": "orders",
+            "tags": ["orders"],
+            "summary": "Render request-aware template fields",
+            "description": "Combines path, query, body, and generated values in a response template.",
+            "enabled": True,
+            "auth_mode": "none",
+            "request_schema": {
+                "type": "object",
+                "properties": {
+                    "customer": {
+                        "type": "object",
+                        "properties": {
+                            "email": {"type": "string", "format": "email"},
+                        },
+                        "required": ["email"],
+                        "x-builder": {"order": ["email"]},
+                    }
+                },
+                "required": ["customer"],
+                "x-builder": {"order": ["customer"]},
+                "x-request": {
+                    "path": {
+                        "type": "object",
+                        "properties": {
+                            "orderId": {"type": "string"},
+                        },
+                        "required": ["orderId"],
+                        "x-builder": {"order": ["orderId"]},
+                    },
+                    "query": {
+                        "type": "object",
+                        "properties": {
+                            "status": {"type": "string"},
+                        },
+                        "required": [],
+                        "x-builder": {"order": ["status"]},
+                    },
+                },
+            },
+            "response_schema": {
+                "type": "object",
+                "properties": {
+                    "receipt": {
+                        "type": "string",
+                        "x-mock": {
+                            "mode": "fixed",
+                            "value": "accepted",
+                            "options": {},
+                            "template": "order={{request.path.orderId}} status={{request.query.status}} email={{request.body.customer.email}} value={{value}}",
+                        },
+                    },
+                    "token": {
+                        "type": "string",
+                        "x-mock": {
+                            "mode": "generate",
+                            "type": "slug",
+                            "options": {"words": 2},
+                            "template": "token={{value}}",
+                        },
+                    },
+                },
+                "required": ["receipt", "token"],
+                "x-builder": {"order": ["receipt", "token"]},
+                "x-mock": {"mode": "generate"},
+            },
+            "success_status_code": 201,
+            "error_rate": 0.0,
+            "latency_min_ms": 0,
+            "latency_max_ms": 0,
+            "seed_key": "templated-orders",
+        },
+        headers=headers,
+    )
+
+    assert create_response.status_code == 201
+
+    runtime_response = client.post(
+        "/api/orders/order-123/emails?status=queued",
+        json={"customer": {"email": "alex@example.com"}},
+    )
+    assert runtime_response.status_code == 201
+
+    payload = runtime_response.json()
+    assert payload["receipt"] == "order=order-123 status=queued email=alex@example.com value=accepted"
+    assert payload["token"].startswith("token=")
+    assert len(payload["token"]) > len("token=")
+
+
+def test_admin_rejects_response_templates_on_non_string_fields(empty_db):
+    client = TestClient(app)
+    headers = _login_headers(client)
+
+    response = client.post(
+        "/api/admin/endpoints",
+        json={
+            "name": "Invalid template endpoint",
+            "method": "GET",
+            "path": "/api/invalid-template",
+            "category": "testing",
+            "tags": [],
+            "summary": "Reject invalid templates",
+            "description": "Templates should only be allowed on string fields.",
+            "enabled": True,
+            "auth_mode": "none",
+            "request_schema": {},
+            "response_schema": {
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "x-mock": {
+                            "mode": "generate",
+                            "type": "integer",
+                            "options": {},
+                            "template": "count={{value}}",
+                        },
+                    }
+                },
+                "required": ["count"],
+                "x-builder": {"order": ["count"]},
+                "x-mock": {"mode": "generate"},
+            },
+            "success_status_code": 200,
+            "error_rate": 0.0,
+            "latency_min_ms": 0,
+            "latency_max_ms": 0,
+            "seed_key": None,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 400
+    assert "only supported on string fields" in response.json()["detail"]
 
 
 def test_seeded_device_schemas_use_curated_model_enum_defaults(seeded_db):

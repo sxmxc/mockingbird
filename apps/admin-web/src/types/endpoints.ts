@@ -4,10 +4,19 @@ export interface JsonObject {
   [key: string]: JsonValue;
 }
 
+export type AdminRole = "viewer" | "editor" | "superuser";
+export type AdminPermission = "routes.read" | "routes.write" | "routes.preview" | "users.manage";
+
 export interface AdminUser {
   id: number;
   username: string;
+  full_name: string | null;
+  email: string | null;
+  avatar_url: string | null;
+  gravatar_url: string;
   is_active: boolean;
+  role: AdminRole;
+  permissions: AdminPermission[];
   is_superuser: boolean;
   must_change_password: boolean;
   last_login_at: string | null;
@@ -38,19 +47,32 @@ export interface ChangePasswordPayload {
   new_password: string;
 }
 
+export interface AdminAccountUpdatePayload {
+  username?: string;
+  full_name?: string | null;
+  email?: string | null;
+  avatar_url?: string | null;
+}
+
 export interface AdminUserCreatePayload {
   username: string;
+  full_name?: string | null;
+  email?: string | null;
+  avatar_url?: string | null;
   password: string;
   is_active?: boolean;
-  is_superuser?: boolean;
+  role?: AdminRole;
   must_change_password?: boolean;
 }
 
 export interface AdminUserUpdatePayload {
   username?: string;
+  full_name?: string | null;
+  email?: string | null;
+  avatar_url?: string | null;
   password?: string;
   is_active?: boolean;
-  is_superuser?: boolean;
+  role?: AdminRole;
   must_change_password?: boolean;
 }
 

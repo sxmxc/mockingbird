@@ -186,7 +186,9 @@ async function saveSchemas(): Promise<void> {
     return;
   }
 
-  const responseError = validateTree(schemaToTree(responseSchema.value, "response"));
+  const responseError = validateTree(schemaToTree(responseSchema.value, "response"), {
+    pathParameterNames: requestPathParameters.value.map((parameter) => parameter.name),
+  });
   if (responseError) {
     pageError.value = responseError;
     tab.value = "response";
@@ -243,7 +245,7 @@ async function saveSchemas(): Promise<void> {
           variant="text"
           @click="router.push({ name: endpoint ? 'endpoints-edit' : 'endpoints-browse', params: endpoint ? { endpointId: endpoint.id } : undefined })"
         >
-          Back to settings
+          Back to route
         </v-btn>
         <v-btn
           v-if="endpoint"
@@ -259,17 +261,39 @@ async function saveSchemas(): Promise<void> {
         <v-btn v-if="isDirty" prepend-icon="mdi-restore" variant="text" @click="resetToSavedState">
           Reset
         </v-btn>
-        <v-btn color="primary" :loading="isSaving" prepend-icon="mdi-content-save-outline" @click="saveSchemas">
+        <v-btn
+          color="primary"
+          :disabled="!endpoint || !isDirty"
+          :loading="isSaving"
+          prepend-icon="mdi-content-save-outline"
+          @click="saveSchemas"
+        >
           Save schema
         </v-btn>
       </div>
     </div>
 
-    <v-alert v-if="pageSuccess" border="start" class="schema-page-banner" color="success" variant="tonal">
+    <v-alert
+      v-if="pageSuccess"
+      border="start"
+      class="schema-page-banner"
+      closable
+      color="success"
+      variant="tonal"
+      @click:close="pageSuccess = null"
+    >
       {{ pageSuccess }}
     </v-alert>
 
-    <v-alert v-if="pageError" border="start" class="schema-page-banner" color="error" variant="tonal">
+    <v-alert
+      v-if="pageError"
+      border="start"
+      class="schema-page-banner"
+      closable
+      color="error"
+      variant="tonal"
+      @click:close="pageError = null"
+    >
       {{ pageError }}
     </v-alert>
 
@@ -372,6 +396,8 @@ async function saveSchemas(): Promise<void> {
         <SchemaEditorWorkspace
           v-model:seed-key="seedKey"
           :path-parameters="requestPathParameters"
+          :query-parameters="requestQueryParameters"
+          :request-body-schema="requestBodySchema"
           :schema="responseSchema"
           scope="response"
           @update:schema="responseSchema = $event"

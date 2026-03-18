@@ -4,12 +4,18 @@ import type { Endpoint } from "../types/endpoints";
 
 const ITEMS_PER_PAGE = 8;
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   activeEndpointId?: number | null;
+  allowCreate?: boolean;
+  allowDuplicate?: boolean;
   endpoints: Endpoint[];
   error: string | null;
   loading: boolean;
-}>();
+}>(), {
+  activeEndpointId: null,
+  allowCreate: true,
+  allowDuplicate: true,
+});
 
 const emit = defineEmits<{
   create: [];
@@ -113,7 +119,7 @@ watch(
             variant="text"
             @click="emit('refresh')"
           />
-          <v-btn color="primary" prepend-icon="mdi-plus" @click="emit('create')">
+          <v-btn v-if="allowCreate !== false" color="primary" prepend-icon="mdi-plus" @click="emit('create')">
             New
           </v-btn>
         </div>
@@ -208,6 +214,7 @@ watch(
                   {{ endpoint.enabled ? "Live" : "Disabled" }}
                 </v-chip>
                 <v-btn
+                  v-if="allowDuplicate !== false"
                   class="catalog-duplicate-btn"
                   aria-label="Duplicate route"
                   color="surface-variant"

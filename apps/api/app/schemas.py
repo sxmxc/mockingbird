@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.rbac import AdminPermission, AdminRole
+
 
 class EndpointBase(BaseModel):
     name: str
@@ -109,6 +111,8 @@ class EndpointImportResponse(BaseModel):
 class PreviewRequest(BaseModel):
     response_schema: Dict[str, Any] = Field(default_factory=dict)
     path_parameters: Dict[str, str] = Field(default_factory=dict)
+    query_parameters: Dict[str, str] = Field(default_factory=dict)
+    request_body: Any = None
     seed_key: Optional[str] = None
 
 
@@ -119,7 +123,13 @@ class PreviewResponse(BaseModel):
 class AdminUserRead(BaseModel):
     id: int
     username: str
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    avatar_url: Optional[str] = None
+    gravatar_url: str
     is_active: bool
+    role: AdminRole
+    permissions: List[AdminPermission] = Field(default_factory=list)
     is_superuser: bool
     must_change_password: bool
     last_login_at: Optional[datetime] = None
@@ -150,19 +160,32 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+class AdminAccountUpdate(BaseModel):
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+
 class AdminUserCreate(BaseModel):
     username: str
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    avatar_url: Optional[str] = None
     password: str
     is_active: bool = True
-    is_superuser: bool = False
+    role: AdminRole = AdminRole.editor
     must_change_password: bool = True
 
 
 class AdminUserUpdate(BaseModel):
     username: Optional[str] = None
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    avatar_url: Optional[str] = None
     password: Optional[str] = None
     is_active: Optional[bool] = None
-    is_superuser: Optional[bool] = None
+    role: Optional[AdminRole] = None
     must_change_password: Optional[bool] = None
 
 

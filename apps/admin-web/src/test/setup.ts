@@ -9,13 +9,14 @@ class ResizeObserverMock {
 }
 
 vi.stubGlobal("ResizeObserver", ResizeObserverMock);
-
-const originalConsoleError = console.error;
-
-vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
-  if (args.some((value) => typeof value === "string" && value.includes("Could not parse CSS stylesheet"))) {
-    return;
-  }
-
-  originalConsoleError(...args);
+vi.stubGlobal("visualViewport", {
+  addEventListener() {},
+  removeEventListener() {},
+  height: 900,
+  offsetLeft: 0,
+  offsetTop: 0,
+  pageLeft: 0,
+  pageTop: 0,
+  scale: 1,
+  width: 1440,
 });

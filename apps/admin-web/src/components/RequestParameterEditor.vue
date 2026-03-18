@@ -150,7 +150,7 @@ function updateEnumValues(parameterId: string, rawValue: string): void {
         <v-divider />
 
         <v-card-text class="d-flex flex-column ga-4">
-          <v-row dense>
+          <v-row density="comfortable">
             <v-col cols="12" md="5">
               <v-text-field
                 :disabled="isPathEditor"

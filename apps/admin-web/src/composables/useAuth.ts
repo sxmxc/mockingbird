@@ -10,7 +10,8 @@ import {
   persistSession,
   updateStoredSession,
 } from "../api/admin";
-import type { AdminLoginPayload, AdminSession, AdminSessionSnapshot, AdminUser } from "../types/endpoints";
+import type { AdminLoginPayload, AdminPermission, AdminRole, AdminSession, AdminSessionSnapshot, AdminUser } from "../types/endpoints";
+import { hasAdminPermission, roleLabel } from "../utils/adminAccess";
 
 type AuthStatus = "restoring" | "logged_out" | "authenticating" | "authenticated";
 
@@ -47,6 +48,17 @@ export const authUsername = computed(() => state.session?.user.username ?? null)
 export const isAuthenticated = computed(() => state.status === "authenticated" && hasSession(state.session));
 export const isSuperuser = computed(() => Boolean(state.session?.user.is_superuser));
 export const mustChangePassword = computed(() => Boolean(state.session?.user.must_change_password));
+export const currentRole = computed<AdminRole | null>(() => state.session?.user.role ?? null);
+export const currentRoleLabel = computed(() => roleLabel(currentRole.value));
+export const currentPermissions = computed<AdminPermission[]>(() => state.session?.user.permissions ?? []);
+export const canReadRoutes = computed(() => hasPermissionValue("routes.read"));
+export const canWriteRoutes = computed(() => hasPermissionValue("routes.write"));
+export const canPreviewRoutes = computed(() => hasPermissionValue("routes.preview"));
+export const canManageUsers = computed(() => hasPermissionValue("users.manage"));
+
+export function hasPermissionValue(permission: AdminPermission): boolean {
+  return hasAdminPermission(state.session?.user ?? null, permission);
+}
 
 function applySessionSnapshot(snapshot: AdminSessionSnapshot): void {
   if (!state.session) {
@@ -173,9 +185,17 @@ export function useAuth() {
     sessionMessage: computed(() => state.sessionMessage),
     user: computed(() => state.session?.user ?? null),
     username: authUsername,
+    role: currentRole,
+    roleLabel: currentRoleLabel,
+    permissions: currentPermissions,
     isAuthenticated,
     isSuperuser,
     mustChangePassword,
+    canReadRoutes,
+    canWriteRoutes,
+    canPreviewRoutes,
+    canManageUsers,
+    hasPermission: hasPermissionValue,
     clearSessionMessage,
     login,
     logout,

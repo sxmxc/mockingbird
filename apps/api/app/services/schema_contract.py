@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import Any
 
 
@@ -36,6 +37,8 @@ STRING_FORMAT_BY_VALUE_TYPE = {
     "datetime": "date-time",
     "time": "time",
 }
+TEMPLATE_EXPRESSION_PATTERN = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+TEMPLATE_REQUEST_LOCATIONS = {"path", "query", "body"}
 
 
 def default_response_root() -> dict[str, Any]:
@@ -54,6 +57,20 @@ def normalize_mock_value_type(raw_value_type: Any) -> str | None:
     if not normalized:
         return None
     return MOCK_VALUE_TYPE_ALIASES.get(normalized, normalized)
+
+
+def _normalize_mock_template(mock_config: dict[str, Any]) -> None:
+    template = mock_config.get("template")
+    if template is None:
+        mock_config.pop("template", None)
+        return
+
+    if isinstance(template, str):
+        stripped = template.strip()
+        if stripped:
+            mock_config["template"] = stripped
+            return
+        mock_config.pop("template", None)
 
 
 def default_request_root() -> dict[str, Any]:
@@ -341,6 +358,7 @@ def _normalize_object_schema(schema: dict[str, Any], *, include_mock: bool) -> d
     if include_mock:
         normalized["x-mock"] = dict(schema.get("x-mock", {}) or {"mode": "generate"})
         normalized["x-mock"]["mode"] = _normalize_mock_mode(normalized["x-mock"].get("mode"))
+        _normalize_mock_template(normalized["x-mock"])
 
     return normalized
 
@@ -357,6 +375,7 @@ def _normalize_array_schema(schema: dict[str, Any], *, property_name: str, inclu
     if include_mock:
         normalized["x-mock"] = dict(schema.get("x-mock", {}) or {"mode": "generate"})
         normalized["x-mock"]["mode"] = _normalize_mock_mode(normalized["x-mock"].get("mode"))
+        _normalize_mock_template(normalized["x-mock"])
 
     return normalized
 
@@ -395,10 +414,60 @@ def normalize_schema_for_builder(
                 # Keep the legacy alias populated so older records and tests still round-trip cleanly.
                 mock_config["generator"] = resolved_value_type
             mock_config.setdefault("options", {})
+        _normalize_mock_template(mock_config)
         normalized["x-mock"] = mock_config
         if normalized.get("type") == "string" and "format" not in normalized and resolved_value_type in STRING_FORMAT_BY_VALUE_TYPE:
             normalized["format"] = STRING_FORMAT_BY_VALUE_TYPE[resolved_value_type]
     return normalized
+
+
+def _extract_template_tokens(template: str) -> list[str]:
+    tokens = [match.group(1).strip() for match in TEMPLATE_EXPRESSION_PATTERN.finditer(template)]
+    remainder = TEMPLATE_EXPRESSION_PATTERN.sub("", template)
+    if "{{" in remainder or "}}" in remainder:
+        raise ValueError("Response templates must use balanced {{token}} placeholders.")
+    return tokens
+
+
+def _validate_template_token(token: str, *, path_parameter_names: set[str] | None) -> None:
+    if token == "value":
+        return
+
+    parts = [segment.strip() for segment in token.split(".")]
+    if len(parts) < 3 or parts[0] != "request" or parts[1] not in TEMPLATE_REQUEST_LOCATIONS or any(not segment for segment in parts[2:]):
+        raise ValueError(
+            f"Unsupported response template token '{token}'. Use {{value}}, {{request.path.*}}, {{request.query.*}}, or {{request.body.*}}."
+        )
+
+    if parts[1] == "path" and path_parameter_names is not None and parts[2] not in path_parameter_names:
+        raise ValueError(f"Response template references unknown path parameter '{parts[2]}'.")
+
+
+def validate_response_templates(schema: Any, *, path: str | None = None) -> None:
+    path_parameter_names = set(request_path_parameter_names(path)) if path else None
+
+    def walk(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+
+        mock_config = node.get("x-mock", {}) if isinstance(node.get("x-mock"), dict) else {}
+        template = mock_config.get("template")
+        if template is not None:
+            if not isinstance(template, str):
+                raise ValueError("Response templates must be strings.")
+            if str(node.get("type", "")).lower() != "string":
+                raise ValueError("Response templates are only supported on string fields.")
+            for token in _extract_template_tokens(template):
+                _validate_template_token(token, path_parameter_names=path_parameter_names)
+
+        if node.get("type") == "object" or "properties" in node:
+            for child in (node.get("properties", {}) or {}).values():
+                walk(child)
+
+        if node.get("type") == "array" or "items" in node:
+            walk(node.get("items"))
+
+    walk(schema)
 
 
 def build_fixed_schema_from_example(value: Any) -> dict[str, Any]:

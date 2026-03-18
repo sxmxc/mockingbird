@@ -27,9 +27,15 @@ vi.mock("../api/admin", async () => {
 });
 
 const baseUser = {
+  avatar_url: null,
   created_at: "2026-03-15T00:00:00Z",
+  email: "admin@example.com",
+  full_name: "Admin User",
+  gravatar_url: "https://www.gravatar.com/avatar/admin?d=identicon&s=160",
   id: 1,
   is_active: true,
+  permissions: ["routes.read", "routes.write", "routes.preview", "users.manage"] as const,
+  role: "superuser" as const,
   is_superuser: true,
   last_login_at: null,
   must_change_password: false,
@@ -96,6 +102,29 @@ describe("useAuth", () => {
     expect(apiMocks.persistSession).toHaveBeenCalledWith(baseSession, true);
     expect(auth.status.value).toBe("authenticated");
     expect(auth.session.value?.token).toBe("session-token");
+  });
+
+  it("derives permission-aware route access from the current session", async () => {
+    apiMocks.loginAdmin.mockResolvedValue({
+      ...baseSession,
+      user: {
+        ...baseUser,
+        permissions: ["routes.read", "routes.preview"],
+        role: "viewer",
+        is_superuser: false,
+      },
+    });
+
+    const { login, useAuth } = await import("./useAuth");
+    await login("viewer", "viewer123456", { rememberMe: false });
+
+    const auth = useAuth();
+
+    expect(auth.role.value).toBe("viewer");
+    expect(auth.canReadRoutes.value).toBe(true);
+    expect(auth.canPreviewRoutes.value).toBe(true);
+    expect(auth.canWriteRoutes.value).toBe(false);
+    expect(auth.canManageUsers.value).toBe(false);
   });
 
   it("clears stale stored sessions when restore fails with 401", async () => {

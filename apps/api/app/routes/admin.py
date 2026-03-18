@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlmodel import Session, select
 
 from app.crud import (
@@ -17,6 +17,7 @@ from app.crud import (
 from app.db import get_session
 from app.models import EndpointDefinition
 from app.schemas import (
+    AdminAccountUpdate,
     AdminLoginRequest,
     AdminLoginResponse,
     AdminSessionRead,
@@ -38,7 +39,9 @@ from app.schemas import (
 )
 from app.services.admin_auth import (
     AdminContext,
+    AdminLoginThrottleError,
     authenticate_admin_user,
+    build_admin_user_read,
     count_active_superusers,
     create_admin_session,
     create_admin_user,
@@ -46,20 +49,29 @@ from app.services.admin_auth import (
     get_admin_context,
     get_admin_user,
     list_admin_users,
-    require_admin_access,
-    require_superuser_access,
+    require_route_preview_access,
+    require_route_read_access,
+    require_route_write_access,
+    require_user_management_access,
+    resolve_admin_role,
     revoke_admin_session,
     revoke_user_sessions,
     update_admin_user,
+    update_own_account,
     update_own_password,
 )
+from app.rbac import AdminRole, normalize_admin_role
 from app.services.admin_endpoint_policy import (
     normalize_endpoint_method,
     normalize_endpoint_path,
     validate_endpoint_path,
 )
 from app.services.mock_generation import preview_from_schema
-from app.services.schema_contract import normalize_request_schema_contract, normalize_schema_for_builder
+from app.services.schema_contract import (
+    normalize_request_schema_contract,
+    normalize_schema_for_builder,
+    validate_response_templates,
+)
 from app.time_utils import utc_now
 
 
@@ -80,18 +92,30 @@ def _normalize_request_schema(schema: dict | None, *, path: str | None = None) -
     return normalize_request_schema_contract(schema or {}, path=path)
 
 
-def _normalize_response_schema(schema: dict | None) -> dict:
-    return normalize_schema_for_builder(schema or {}, property_name="root", include_mock=True)
+def _normalize_response_schema(schema: dict | None, *, path: str | None = None) -> dict:
+    normalized = normalize_schema_for_builder(schema or {}, property_name="root", include_mock=True)
+    validate_response_templates(normalized, path=path)
+    return normalized
 
 
 def _build_session_read(context: AdminContext) -> AdminSessionRead:
-    return AdminSessionRead(user=context.user, expires_at=context.session.expires_at)
+    return AdminSessionRead(user=build_admin_user_read(context.user), expires_at=context.session.expires_at)
 
 
 def _raise_user_input_error(error: ValueError) -> None:
     detail = str(error)
     status_code = status.HTTP_409_CONFLICT if "already in use" in detail.lower() else status.HTTP_400_BAD_REQUEST
     raise HTTPException(status_code=status_code, detail=detail)
+
+
+def _client_ip_from_request(request: Request) -> str | None:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        first_hop = forwarded_for.split(",")[0].strip()
+        if first_hop:
+            return first_hop
+
+    return request.client.host if request.client else None
 
 
 def _normalize_endpoint_fields(
@@ -120,7 +144,10 @@ def _normalize_endpoint_fields(
         normalized_updates["request_schema"] = _normalize_request_schema(current_request_schema, path=normalized_path)
 
     if "response_schema" in normalized_updates:
-        normalized_updates["response_schema"] = _normalize_response_schema(normalized_updates["response_schema"])
+        normalized_updates["response_schema"] = _normalize_response_schema(
+            normalized_updates["response_schema"],
+            path=normalized_path,
+        )
 
     return normalized_updates
 
@@ -455,9 +482,23 @@ def _apply_endpoint_import_plan(session: Session, actions: list[_EndpointImportP
 @router.post("/auth/login", response_model=AdminLoginResponse)
 def login_admin(
     payload: AdminLoginRequest,
+    request: Request,
     session: Session = Depends(get_session),
 ) -> AdminLoginResponse:
-    user = authenticate_admin_user(session, payload.username, payload.password)
+    try:
+        user = authenticate_admin_user(
+            session,
+            payload.username,
+            payload.password,
+            client_ip=_client_ip_from_request(request),
+        )
+    except AdminLoginThrottleError as error:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Try again later.",
+            headers={"Retry-After": str(error.retry_after_seconds)},
+        ) from error
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -466,7 +507,7 @@ def login_admin(
         )
 
     token, admin_session = create_admin_session(session, user, remember_me=payload.remember_me)
-    return AdminLoginResponse(token=token, user=user, expires_at=admin_session.expires_at)
+    return AdminLoginResponse(token=token, user=build_admin_user_read(user), expires_at=admin_session.expires_at)
 
 
 @router.get("/auth/me", response_model=AdminSessionRead)
@@ -501,32 +542,87 @@ def change_own_password(
 
     revoke_user_sessions(session, context.user.id, exclude_session_id=context.session.id)
     refreshed_user = get_admin_user(session, context.user.id)
-    return AdminSessionRead(user=refreshed_user or context.user, expires_at=context.session.expires_at)
+    return AdminSessionRead(
+        user=build_admin_user_read(refreshed_user or context.user),
+        expires_at=context.session.expires_at,
+    )
+
+
+@router.get("/account/me", response_model=AdminUserRead)
+def read_own_account(context: AdminContext = Depends(get_admin_context)) -> AdminUserRead:
+    return build_admin_user_read(context.user)
+
+
+@router.put("/account/me", response_model=AdminSessionRead)
+def update_own_account_profile(
+    payload: AdminAccountUpdate,
+    session: Session = Depends(get_session),
+    context: AdminContext = Depends(get_admin_context),
+) -> AdminSessionRead:
+    try:
+        account_updates: dict[str, str | None] = {}
+        if "username" in payload.model_fields_set:
+            account_updates["username"] = payload.username
+        if "full_name" in payload.model_fields_set:
+            account_updates["full_name"] = payload.full_name
+        if "email" in payload.model_fields_set:
+            account_updates["email"] = payload.email
+        if "avatar_url" in payload.model_fields_set:
+            account_updates["avatar_url"] = payload.avatar_url
+
+        updated_user = update_own_account(
+            session,
+            context.user,
+            **account_updates,
+        )
+    except ValueError as error:
+        _raise_user_input_error(error)
+
+    return AdminSessionRead(
+        user=build_admin_user_read(updated_user),
+        expires_at=context.session.expires_at,
+    )
 
 
 @router.get("/users", response_model=list[AdminUserRead])
 def list_dashboard_users(
     session: Session = Depends(get_session),
-    _: AdminContext = Depends(require_superuser_access),
+    _: AdminContext = Depends(require_user_management_access),
 ) -> list[AdminUserRead]:
-    return list_admin_users(session)
+    return [build_admin_user_read(user) for user in list_admin_users(session)]
+
+
+@router.get("/users/{user_id}", response_model=AdminUserRead)
+def read_dashboard_user(
+    user_id: int,
+    session: Session = Depends(get_session),
+    _: AdminContext = Depends(require_user_management_access),
+) -> AdminUserRead:
+    user = get_admin_user(session, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin user not found.")
+    return build_admin_user_read(user)
 
 
 @router.post("/users", response_model=AdminUserRead, status_code=status.HTTP_201_CREATED)
 def create_dashboard_user(
     payload: AdminUserCreate,
     session: Session = Depends(get_session),
-    _: AdminContext = Depends(require_superuser_access),
+    _: AdminContext = Depends(require_user_management_access),
 ) -> AdminUserRead:
     try:
-        return create_admin_user(
+        created_user = create_admin_user(
             session,
             username=payload.username,
+            full_name=payload.full_name,
+            email=payload.email,
+            avatar_url=payload.avatar_url,
             password=payload.password,
             is_active=payload.is_active,
-            is_superuser=payload.is_superuser,
+            role=payload.role,
             must_change_password=payload.must_change_password,
         )
+        return build_admin_user_read(created_user)
     except ValueError as error:
         _raise_user_input_error(error)
 
@@ -536,45 +632,59 @@ def update_dashboard_user(
     user_id: int,
     payload: AdminUserUpdate,
     session: Session = Depends(get_session),
-    context: AdminContext = Depends(require_superuser_access),
+    context: AdminContext = Depends(require_user_management_access),
 ) -> AdminUserRead:
     user = get_admin_user(session, user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin user not found.")
 
     if user.id == context.user.id:
+        current_role = resolve_admin_role(user)
+        requested_role = normalize_admin_role(payload.role) if payload.role is not None else None
         if payload.password is not None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Use the change-password flow to rotate your own password.",
             )
-        if payload.is_active is False or payload.is_superuser is False:
+        if payload.is_active is False or (requested_role is not None and requested_role != current_role):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Use another superuser account to change your own role or access.",
             )
 
-    if payload.is_active is False and user.is_active and user.is_superuser and count_active_superusers(session, exclude_user_id=user.id) == 0:
+    current_role = resolve_admin_role(user)
+    requested_role = normalize_admin_role(payload.role) if payload.role is not None else current_role
+
+    if payload.is_active is False and user.is_active and current_role == AdminRole.superuser and count_active_superusers(session, exclude_user_id=user.id) == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Mockingbird must keep at least one active superuser.",
         )
 
-    if payload.is_superuser is False and user.is_superuser and user.is_active and count_active_superusers(session, exclude_user_id=user.id) == 0:
+    if requested_role != AdminRole.superuser and current_role == AdminRole.superuser and user.is_active and count_active_superusers(session, exclude_user_id=user.id) == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Mockingbird must keep at least one active superuser.",
         )
 
     try:
+        user_updates: dict[str, Any] = {}
+        if "full_name" in payload.model_fields_set:
+            user_updates["full_name"] = payload.full_name
+        if "email" in payload.model_fields_set:
+            user_updates["email"] = payload.email
+        if "avatar_url" in payload.model_fields_set:
+            user_updates["avatar_url"] = payload.avatar_url
+
         updated_user = update_admin_user(
             session,
             user,
             username=payload.username,
             password=payload.password,
             is_active=payload.is_active,
-            is_superuser=payload.is_superuser,
+            role=payload.role,
             must_change_password=payload.must_change_password,
+            **user_updates,
         )
     except ValueError as error:
         _raise_user_input_error(error)
@@ -582,14 +692,14 @@ def update_dashboard_user(
     if payload.password is not None or payload.is_active is False:
         revoke_user_sessions(session, updated_user.id)
 
-    return updated_user
+    return build_admin_user_read(updated_user)
 
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_dashboard_user(
     user_id: int,
     session: Session = Depends(get_session),
-    context: AdminContext = Depends(require_superuser_access),
+    context: AdminContext = Depends(require_user_management_access),
 ) -> Response:
     user = get_admin_user(session, user_id)
     if not user:
@@ -599,7 +709,7 @@ def delete_dashboard_user(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Sign in with another superuser account before deleting this one.",
         )
-    if user.is_active and user.is_superuser and count_active_superusers(session, exclude_user_id=user.id) == 0:
+    if user.is_active and resolve_admin_role(user) == AdminRole.superuser and count_active_superusers(session, exclude_user_id=user.id) == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Mockingbird must keep at least one active superuser.",
@@ -612,7 +722,7 @@ def delete_dashboard_user(
 @router.get("/endpoints", response_model=list[EndpointRead])
 def list_all_endpoints(
     session: Session = Depends(get_session),
-    _: AdminContext = Depends(require_admin_access),
+    _: AdminContext = Depends(require_route_read_access),
 ) -> list[EndpointRead]:
     return list_endpoints(session)
 
@@ -620,7 +730,7 @@ def list_all_endpoints(
 @router.get("/endpoints/export", response_model=EndpointBundle)
 def export_all_endpoints(
     session: Session = Depends(get_session),
-    _: AdminContext = Depends(require_admin_access),
+    _: AdminContext = Depends(require_route_read_access),
 ) -> EndpointBundle:
     return _serialize_endpoint_bundle(_list_all_endpoints(session))
 
@@ -629,7 +739,7 @@ def export_all_endpoints(
 def import_endpoints_bundle(
     payload: EndpointImportRequest,
     session: Session = Depends(get_session),
-    _: AdminContext = Depends(require_admin_access),
+    _: AdminContext = Depends(require_route_write_access),
 ) -> EndpointImportResponse:
     actions, operations, has_errors = _plan_endpoint_import(session, payload)
     applied = False
@@ -655,7 +765,7 @@ def import_endpoints_bundle(
 def read_endpoint(
     endpoint_id: int,
     session: Session = Depends(get_session),
-    _: AdminContext = Depends(require_admin_access),
+    _: AdminContext = Depends(require_route_read_access),
 ) -> EndpointRead:
     endpoint = get_endpoint(session, endpoint_id)
     if not endpoint:
@@ -667,13 +777,16 @@ def read_endpoint(
 def create_new_endpoint(
     endpoint_in: EndpointCreate,
     session: Session = Depends(get_session),
-    _: AdminContext = Depends(require_admin_access),
+    _: AdminContext = Depends(require_route_write_access),
 ) -> EndpointRead:
-    normalized_fields = _normalize_endpoint_fields(
-        endpoint_in.model_dump(),
-        current_path=endpoint_in.path,
-        current_request_schema=endpoint_in.request_schema,
-    )
+    try:
+        normalized_fields = _normalize_endpoint_fields(
+            endpoint_in.model_dump(),
+            current_path=endpoint_in.path,
+            current_request_schema=endpoint_in.request_schema,
+        )
+    except ValueError as error:
+        _raise_user_input_error(error)
     normalized_fields["slug"] = _build_unique_slug(
         session,
         name=str(normalized_fields.get("name") or endpoint_in.name),
@@ -688,17 +801,20 @@ def update_existing_endpoint(
     endpoint_id: int,
     endpoint_in: EndpointUpdate,
     session: Session = Depends(get_session),
-    _: AdminContext = Depends(require_admin_access),
+    _: AdminContext = Depends(require_route_write_access),
 ) -> EndpointRead:
     endpoint = get_endpoint(session, endpoint_id)
     if not endpoint:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
 
-    updates = _normalize_endpoint_fields(
-        endpoint_in.model_dump(exclude_unset=True),
-        current_path=endpoint.path,
-        current_request_schema=endpoint.request_schema,
-    )
+    try:
+        updates = _normalize_endpoint_fields(
+            endpoint_in.model_dump(exclude_unset=True),
+            current_path=endpoint.path,
+            current_request_schema=endpoint.request_schema,
+        )
+    except ValueError as error:
+        _raise_user_input_error(error)
     if "name" in updates or "slug" in updates:
         updates["slug"] = _build_unique_slug(
             session,
@@ -713,7 +829,7 @@ def update_existing_endpoint(
 def delete_existing_endpoint(
     endpoint_id: int,
     session: Session = Depends(get_session),
-    _: AdminContext = Depends(require_admin_access),
+    _: AdminContext = Depends(require_route_write_access),
 ) -> Response:
     endpoint = get_endpoint(session, endpoint_id)
     if not endpoint:
@@ -725,13 +841,18 @@ def delete_existing_endpoint(
 @router.post("/endpoints/preview-response", response_model=PreviewResponse)
 def preview_response(
     payload: PreviewRequest,
-    _: AdminContext = Depends(require_admin_access),
+    _: AdminContext = Depends(require_route_preview_access),
 ) -> PreviewResponse:
-    return PreviewResponse(
-        preview=preview_from_schema(
+    try:
+        preview = preview_from_schema(
             _normalize_response_schema(payload.response_schema),
             path_parameters=payload.path_parameters,
+            query_parameters=payload.query_parameters,
+            request_body=payload.request_body,
             seed_key=payload.seed_key,
             identity="preview",
-        ),
-    )
+        )
+    except ValueError as error:
+        _raise_user_input_error(error)
+
+    return PreviewResponse(preview=preview)

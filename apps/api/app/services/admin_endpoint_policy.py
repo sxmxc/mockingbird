@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import re
+
 from fastapi import HTTPException, status
 
 
 PRIVATE_ADMIN_PREFIX = "/api/admin"
 PUBLIC_REFERENCE_PATH = "/api/reference.json"
 PUBLIC_ROOT_PATH = "/api"
+PATH_PARAMETER_PATTERN = re.compile(r"\{([A-Za-z_][A-Za-z0-9_-]*)\}")
 
 
 def normalize_endpoint_method(method: str) -> str:
@@ -43,3 +46,11 @@ def validate_endpoint_path(path: str) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="The /api/admin namespace is reserved for private admin routes.",
         )
+
+    if "{" in path or "}" in path:
+        remainder = PATH_PARAMETER_PATTERN.sub("", path)
+        if "{" in remainder or "}" in remainder:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Path parameters must use balanced {name} segments.",
+            )

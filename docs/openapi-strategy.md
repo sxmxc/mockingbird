@@ -11,7 +11,7 @@ The OpenAPI spec must always reflect the active public mock endpoints stored in 
 ## Key mechanics
 - Each active endpoint becomes an OpenAPI path entry.
 - The `method`, `path`, `summary`, `description`, and schemas drive the OpenAPI operation fields.
-- Internal builder and generator extensions (`x-builder`, `x-mock`, including semantic mock value types) are removed before publishing the public schema.
+- Internal builder and generator extensions (`x-builder`, `x-mock`, including semantic mock value types and response-template metadata) are removed before publishing the public schema.
 - Any validation errors in schemas should be surfaced when saving an endpoint.
 
 ## Developer notes

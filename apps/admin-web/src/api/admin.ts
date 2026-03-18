@@ -1,4 +1,5 @@
 import type {
+  AdminAccountUpdatePayload,
   AdminLoginPayload,
   AdminSession,
   AdminSessionSnapshot,
@@ -12,6 +13,7 @@ import type {
   EndpointImportResponse,
   EndpointPayload,
   JsonObject,
+  JsonValue,
   PreviewResponsePayload,
 } from "../types/endpoints";
 
@@ -200,8 +202,26 @@ export function changePassword(
   });
 }
 
+export function getAccountProfile(session: AdminSession | string): Promise<AdminUser> {
+  return request<AdminUser>("/api/admin/account/me", session);
+}
+
+export function updateAccountProfile(
+  payload: AdminAccountUpdatePayload,
+  session: AdminSession | string,
+): Promise<AdminSessionSnapshot> {
+  return request<AdminSessionSnapshot>("/api/admin/account/me", session, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function listAdminUsers(session: AdminSession): Promise<AdminUser[]> {
   return request<AdminUser[]>("/api/admin/users", session);
+}
+
+export function getAdminUser(userId: number, session: AdminSession): Promise<AdminUser> {
+  return request<AdminUser>(`/api/admin/users/${userId}`, session);
 }
 
 export function createAdminUser(payload: AdminUserCreatePayload, session: AdminSession): Promise<AdminUser> {
@@ -275,11 +295,17 @@ export function previewResponse(
   seedKey: string | null,
   pathParameters: Record<string, string>,
   session: AdminSession,
+  options: {
+    queryParameters?: Record<string, string>;
+    requestBody?: JsonValue | null;
+  } = {},
 ): Promise<PreviewResponsePayload> {
   return request<PreviewResponsePayload>("/api/admin/endpoints/preview-response", session, {
     method: "POST",
     body: JSON.stringify({
       path_parameters: pathParameters,
+      query_parameters: options.queryParameters ?? {},
+      request_body: options.requestBody ?? null,
       response_schema: responseSchema,
       seed_key: seedKey,
     }),

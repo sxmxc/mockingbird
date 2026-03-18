@@ -26,6 +26,13 @@ const frontendHost = process.env.FRONTEND_HOST || "0.0.0.0";
 const frontendPort = Number(process.env.FRONTEND_PORT) || 3000;
 const frontendAllowedHosts = parseAllowedHosts(process.env.FRONTEND_ALLOWED_HOSTS);
 const frontendProxyTarget = process.env.FRONTEND_DEV_PROXY_TARGET || "http://localhost:8000";
+const devSecurityHeaders = {
+  "Content-Security-Policy":
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data: https:; connect-src 'self' http: https: ws: wss:; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+};
 
 export default defineConfig({
   plugins: [
@@ -42,6 +49,7 @@ export default defineConfig({
     port: frontendPort,
     host: frontendHost,
     allowedHosts: frontendAllowedHosts,
+    headers: devSecurityHeaders,
     proxy: {
       "/api": {
         target: frontendProxyTarget,
@@ -50,7 +58,9 @@ export default defineConfig({
     },
   },
   test: {
-    css: true,
+    // Vuetify ships modern CSS that jsdom does not fully parse; stubbing CSS
+    // imports keeps component tests focused on behavior instead of stylesheet noise.
+    css: false,
     environment: "jsdom",
     globals: true,
     server: {

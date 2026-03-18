@@ -10,6 +10,7 @@ import {
   schemaToTree,
   treeToSchema,
   updateNode,
+  validateTree,
 } from "./schemaBuilder";
 
 describe("schemaBuilder utilities", () => {
@@ -36,6 +37,32 @@ describe("schemaBuilder utilities", () => {
     const tree = schemaToTree(source, "response");
     const roundTripped = treeToSchema(tree, "response");
 
+    expect(roundTripped).toMatchObject(source);
+  });
+
+  it("round-trips response string templates through the builder tree", () => {
+    const source = {
+      type: "object",
+      properties: {
+        slug: {
+          type: "string",
+          "x-mock": {
+            mode: "generate",
+            type: "text",
+            options: {},
+            template: "order={{request.path.orderId}} base={{value}}",
+          },
+        },
+      },
+      required: ["slug"],
+      "x-builder": { order: ["slug"] },
+      "x-mock": { mode: "generate", options: {} },
+    };
+
+    const tree = schemaToTree(source, "response");
+    expect(tree.children[0]?.template).toBe("order={{request.path.orderId}} base={{value}}");
+
+    const roundTripped = treeToSchema(tree, "response");
     expect(roundTripped).toMatchObject(source);
   });
 
@@ -177,5 +204,33 @@ describe("schemaBuilder utilities", () => {
       parameterSource: "deviceId",
       generator: "number",
     });
+  });
+
+  it("validates response templates against the saved path parameters", () => {
+    const tree = schemaToTree(
+      {
+        type: "object",
+        properties: {
+          message: {
+            type: "string",
+            "x-mock": {
+              mode: "generate",
+              type: "text",
+              options: {},
+              template: "order={{request.path.orderId}} status={{request.query.status}}",
+            },
+          },
+        },
+        required: ["message"],
+        "x-builder": { order: ["message"] },
+        "x-mock": { mode: "generate", options: {} },
+      },
+      "response",
+    );
+
+    expect(validateTree(tree, { pathParameterNames: ["orderId"] })).toBeNull();
+    expect(validateTree(tree, { pathParameterNames: ["deviceId"] })).toBe(
+      "message: Response template references unknown path parameter 'orderId'.",
+    );
   });
 });

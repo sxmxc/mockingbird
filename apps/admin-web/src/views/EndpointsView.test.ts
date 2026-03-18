@@ -10,6 +10,9 @@ import type { Endpoint, EndpointDraft } from "../types/endpoints";
 
 const authStub = vi.hoisted(() => ({
   logout: vi.fn(),
+  canPreviewRoutes: { value: true },
+  canWriteRoutes: { value: true },
+  mustChangePassword: { value: false },
   session: {
     value: {
       expires_at: "2026-03-16T00:00:00Z",
@@ -17,7 +20,13 @@ const authStub = vi.hoisted(() => ({
       user: {
         id: 1,
         username: "admin",
+        full_name: "Admin User",
+        email: "admin@example.com",
+        avatar_url: null,
+        gravatar_url: "https://www.gravatar.com/avatar/admin?d=identicon&s=160",
         is_active: true,
+        role: "superuser",
+        permissions: ["routes.read", "routes.write", "routes.preview", "users.manage"],
         is_superuser: true,
         must_change_password: false,
         last_login_at: null,
@@ -51,6 +60,14 @@ const EndpointCatalogStub = defineComponent({
       type: Number,
       default: null,
     },
+    allowCreate: {
+      type: Boolean,
+      default: true,
+    },
+    allowDuplicate: {
+      type: Boolean,
+      default: true,
+    },
     endpoints: {
       type: Array as () => Endpoint[],
       required: true,
@@ -68,9 +85,12 @@ const EndpointCatalogStub = defineComponent({
   template: `
     <div>
       <button type="button" @click="$emit('refresh')">Refresh catalog</button>
+      <button type="button" @click="$emit('select', endpoints[0]?.id)" :disabled="!endpoints.length">Select first</button>
       <div data-testid="catalog-error">{{ error ?? "" }}</div>
       <div data-testid="catalog-loading">{{ loading ? "loading" : "idle" }}</div>
       <div data-testid="catalog-active">{{ activeEndpointId ?? "" }}</div>
+      <div data-testid="catalog-allow-create">{{ allowCreate ? "yes" : "no" }}</div>
+      <div data-testid="catalog-allow-duplicate">{{ allowDuplicate ? "yes" : "no" }}</div>
       <div data-testid="catalog-names">{{ endpoints.map((endpoint) => endpoint.name).join(" | ") }}</div>
     </div>
   `,
@@ -161,6 +181,9 @@ describe("EndpointsView", () => {
   beforeEach(() => {
     vi.mocked(listEndpoints).mockReset();
     authStub.logout.mockReset();
+    authStub.canPreviewRoutes.value = true;
+    authStub.canWriteRoutes.value = true;
+    authStub.mustChangePassword.value = false;
     Object.defineProperty(document, "visibilityState", {
       configurable: true,
       value: "visible",
@@ -230,5 +253,28 @@ describe("EndpointsView", () => {
     await flushPromises();
 
     expect(screen.getByTestId("draft-name")).toHaveTextContent("List users (remote)");
+  });
+
+  it("routes catalog selection to preview for read-only viewers", async () => {
+    authStub.canWriteRoutes.value = false;
+
+    vi.mocked(listEndpoints).mockResolvedValue([
+      createEndpoint(1, { name: "List users" }),
+    ]);
+
+    const { router } = await renderView("/endpoints", "browse");
+    await flushPromises();
+    const pushSpy = vi.spyOn(router, "push");
+
+    expect(screen.getByTestId("catalog-allow-create")).toHaveTextContent("no");
+    expect(screen.getByTestId("catalog-allow-duplicate")).toHaveTextContent("no");
+
+    await fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    await flushPromises();
+
+    expect(pushSpy).toHaveBeenCalledWith({
+      name: "endpoint-preview",
+      params: { endpointId: 1 },
+    });
   });
 });

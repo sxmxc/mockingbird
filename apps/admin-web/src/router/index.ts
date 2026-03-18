@@ -2,9 +2,10 @@ import { createRouter, createWebHistory } from "vue-router";
 import EndpointsView from "../views/EndpointsView.vue";
 import EndpointPreviewView from "../views/EndpointPreviewView.vue";
 import LoginView from "../views/LoginView.vue";
+import ProfileView from "../views/ProfileView.vue";
 import SchemaEditorView from "../views/SchemaEditorView.vue";
-import SecurityView from "../views/SecurityView.vue";
-import { ensureAuthBooted, isAuthenticated, mustChangePassword } from "../composables/useAuth";
+import UsersView from "../views/UsersView.vue";
+import { ensureAuthBooted, hasPermissionValue, isAuthenticated, mustChangePassword } from "../composables/useAuth";
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -22,12 +23,38 @@ export const router = createRouter({
       },
     },
     {
-      path: "/security",
-      name: "security",
-      component: SecurityView,
+      path: "/account",
+      redirect: {
+        name: "account-profile",
+      },
+    },
+    {
+      path: "/account/profile",
+      name: "account-profile",
+      component: ProfileView,
       meta: {
         requiresAuth: true,
-        title: "Security",
+        title: "Profile",
+      },
+    },
+    {
+      path: "/security",
+      name: "security",
+      redirect: {
+        name: "account-profile",
+      },
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
+      path: "/users",
+      name: "users",
+      component: UsersView,
+      meta: {
+        requiresAuth: true,
+        permission: "users.manage",
+        title: "Users",
       },
     },
     {
@@ -39,6 +66,7 @@ export const router = createRouter({
       },
       meta: {
         requiresAuth: true,
+        permission: "routes.read",
         title: "Routes",
         transitionShell: "endpoint-workspace",
       },
@@ -52,6 +80,7 @@ export const router = createRouter({
       },
       meta: {
         requiresAuth: true,
+        permission: "routes.write",
         title: "Create route",
         transitionShell: "endpoint-workspace",
       },
@@ -65,6 +94,7 @@ export const router = createRouter({
       },
       meta: {
         requiresAuth: true,
+        permission: "routes.write",
         title: "Route",
         transitionShell: "endpoint-workspace",
       },
@@ -75,6 +105,7 @@ export const router = createRouter({
       component: SchemaEditorView,
       meta: {
         requiresAuth: true,
+        permission: "routes.write",
         title: "Schema",
       },
     },
@@ -84,6 +115,7 @@ export const router = createRouter({
       component: EndpointPreviewView,
       meta: {
         requiresAuth: true,
+        permission: "routes.preview",
         title: "Test route",
       },
     },
@@ -102,15 +134,21 @@ router.beforeEach(async (to) => {
     };
   }
 
-  if (isAuthenticated.value && mustChangePassword.value && to.name !== "security") {
+  if (isAuthenticated.value && mustChangePassword.value && to.name !== "account-profile" && to.name !== "security") {
     return {
-      name: "security",
+      name: "account-profile",
+    };
+  }
+
+  if (typeof to.meta.permission === "string" && !hasPermissionValue(to.meta.permission as AdminPermission)) {
+    return {
+      name: "endpoints-browse",
     };
   }
 
   if (to.name === "login" && isAuthenticated.value) {
     return {
-      name: mustChangePassword.value ? "security" : "endpoints-browse",
+      name: mustChangePassword.value ? "account-profile" : "endpoints-browse",
     };
   }
 
@@ -133,3 +171,4 @@ router.afterEach((to, from) => {
     }
   }
 });
+import type { AdminPermission } from "../types/endpoints";

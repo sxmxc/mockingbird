@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -7,8 +8,18 @@ from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 from app import models  # noqa: F401
+from app.config import Settings
 
 config = context.config
+settings = Settings()
+sync_database_url = os.environ.get(
+    "DATABASE_URL",
+    (
+        f"postgresql+asyncpg://{settings.postgres_user}:{settings.postgres_password}"
+        f"@{settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}"
+    ),
+).replace("+asyncpg", "")
+config.set_main_option("sqlalchemy.url", sync_database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

@@ -3,15 +3,15 @@
 This file tracks the work needed to bootstrap and evolve the project.
 
 ## Now
-- [ ] Reduce or eliminate Vuetify/jsdom CSS parse noise during frontend tests
+- [ ] Prototype and validate a `Vue Flow`-based schema canvas architecture while preserving the existing `request_schema` / `response_schema` contract
 
 ## Next
+- [ ] Incrementally migrate schema-studio drag/drop, insert menus, and branch controls onto the new canvas foundation
 - [ ] Add richer simulation UX around latency/error scenarios
 - [ ] Refine the public landing page quick reference with richer try-it tooling or grouped filtering if the catalog grows
 
 ## Later
 - [ ] Add advanced auth (API key, bearer token, scopes)
-- [ ] Add role-based access to admin UI
 - [ ] Improve OpenAPI caching strategy for performance
 - [ ] Add multi-project support (namespaces)
 
@@ -93,3 +93,16 @@ This file tracks the work needed to bootstrap and evolve the project.
 - [x] Add full endpoint catalog export/import for backup and environment sync
 - [x] Fix large-catalog import planning and preserve zero-valued request-parameter numeric constraints
 - [x] Fix Postgres multi-route import flushes against the varchar-backed `auth_mode` column
+- [x] Reduce or eliminate Vuetify/jsdom CSS parse noise during frontend tests
+- [x] Scope schema-aware response templating so it layers onto `response_schema` without breaking the drag-and-drop WYSIWYG schema studio
+- [x] Implement schema-aware response templating in backend preview/runtime flows using request path/query/body context
+- [x] Add schema-studio string-template controls, helper chips, and validation for response templating
+- [x] Polish the schema studio with below-canvas detail panels, query-value pills, plus-button insert menus, dedicated drag handles, branch collapse controls, dismissible alerts, dirty-only saving, and clearer selected-node cues
+- [x] Expand dashboard-user management with roles and role-based access across the admin UI and admin API
+- [x] Fix the admin-role Alembic backfill so existing Postgres dev databases upgrade cleanly to RBAC
+- [x] Split the old security surface into dedicated profile and user-management journeys with a traditional account dropdown
+- [x] Fix routes-to-profile and routes-to-schema navigation so routed transitions no longer blank the admin shell
+- [x] Round out admin account/user management with profile fields, avatar support plus Gravatar fallback, directory search/activity metadata, and a migration path that keeps Alembic on the configured database
+- [x] Redesign the admin shell and users page with a cleaner top bar, directory-first user management, and dialog-based account creation
+- [x] Remove deprecated Vuetify theme and row-density usage surfaced by admin console warnings
+- [x] Harden the public/admin surfaces against landing-page XSS, literal-path route matching, login brute forcing, missing security headers, catchall event-loop blocking, and partial profile update failures

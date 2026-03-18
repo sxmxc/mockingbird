@@ -1392,9 +1392,24 @@ LANDING_TEMPLATE = """
       </div>
     </div>
 
+    <script id="initial-reference-data" type="application/json">__INITIAL_REFERENCE_JSON__</script>
     <script>
+      function readInitialReference() {
+        const payloadNode = document.getElementById("initial-reference-data");
+        if (!payloadNode) {
+          return {};
+        }
+
+        try {
+          return JSON.parse(payloadNode.textContent || "{}");
+        } catch (error) {
+          console.warn("Unable to parse initial reference payload", error);
+          return {};
+        }
+      }
+
       const themeStorageKey = "mockingbird-public-theme";
-      const initialReference = __INITIAL_REFERENCE__;
+      const initialReference = readInitialReference();
       const refreshIntervalMs = __REFRESH_INTERVAL_MS__;
       const rowsPerPage = __ROWS_PER_PAGE__;
       const heroShell = document.querySelector("[data-hero-shell]");
@@ -2164,11 +2179,22 @@ def _build_reference(session: Session) -> dict:
     return response
 
 
+def _json_for_script_tag(value: object) -> str:
+    return (
+        json.dumps(value, default=str)
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
 def _render_landing_page(reference_payload: dict) -> str:
     total_pages = _page_count(reference_payload)
     return (
         LANDING_TEMPLATE.replace("__HERO_MEDIA__", _build_hero_media())
-        .replace("__INITIAL_REFERENCE__", json.dumps(reference_payload, default=str))
+        .replace("__INITIAL_REFERENCE_JSON__", _json_for_script_tag(reference_payload))
         .replace("__INITIAL_METHOD_FILTERS__", _render_method_filters(reference_payload))
         .replace("__INITIAL_CATEGORY_OPTIONS__", _render_category_options(reference_payload))
         .replace("__INITIAL_ROWS__", _render_reference_rows(reference_payload))

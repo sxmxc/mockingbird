@@ -192,5 +192,69 @@
 - **Identity and slugs**: Match existing routes by normalized `method + path` in v1; keep `slug` internal, include it in the bundle for bookkeeping, and regenerate/de-duplicate it on import rather than exposing it as the user-facing sync key.
 - **Safety rails**: Support `create_only`, `upsert`, and `replace_all` import modes, always offer a dry-run preview, and require explicit confirmation before `replace_all` can delete routes missing from the bundle.
 
+## 2026-03-17: Builder-first roadmap for response templating and RBAC
+- **Templating direction**: Promote richer response templating into the active task list, but keep the drag-and-drop schema studio as the primary authoring surface; templating should layer onto `response_schema` / `x-mock` metadata or a node-level escape hatch instead of replacing the builder with a raw Handlebars/Liquid editor.
+- **Editor safety**: Preserve the pill-tree canvas, `x-builder.order` property ordering, and the array `Item shape` mental model while designing any richer response-authoring features so power-user flexibility does not regress the current WYSIWYG workflow.
+- **Access-control direction**: Prioritize role-based permissions on top of the existing dashboard-user system, because user CRUD already exists and the next gap is controlled access rather than a second user-management concept.
+
+## 2026-03-17: Phase 1 response templating contract
+- **Storage model**: Scope phase 1 templating as an optional `x-mock.template` string on response-side `string` nodes, so the existing `response_schema` tree remains the only source of response shape and OpenAPI sanitization stays centralized.
+- **Rendering model**: Render templates after the normal base-value generation pass, exposing only `value`, `request.path`, `request.query`, and `request.body` context in v1; defer sibling response references, loops, and full Handlebars/Liquid logic until a later iteration.
+- **Editor model**: Keep templating as an inspector-level enhancement for selected response string fields rather than introducing a second raw-template editor, which protects the schema studio's drag/drop WYSIWYG workflow, `x-builder.order`, and array `Item shape` mental model.
+
+## 2026-03-17: Phase 1 template authoring UX
+- **Inspector-first controls**: Keep response templating inside the existing response-string inspector with a `Use template` toggle, multiline field, and helper-token chips rather than adding template-specific canvas nodes or a second response editor.
+- **Preview context inputs**: Let the schema-studio live-preview rail accept editable path, query, and request-body values and send them through the authenticated preview API so request-aware templates can be exercised without leaving the editor.
+- **Client validation**: Mirror the backend token validation rules in the frontend before preview/save so malformed placeholders and unknown path parameters surface immediately while the user is authoring the selected field.
+
+## 2026-03-17: Schema-studio response-authoring ergonomics
+- **Column roles**: Keep the right-side live-preview column focused on generated output, and move request-context preview inputs into a full-width middle-column card beneath the canvas so the sample pane does not get squeezed off-screen.
+- **Form placement**: Move selected-field settings out of the left tool rail and under the canvas, because longer inspector forms read better at canvas width and the left rail should stay dedicated to add/value palettes.
+- **Editor affordances**: Show both saved path and query inputs as route-value pills where relevant, make transient editor alerts dismissible, gate `Save schema` behind a real dirty state, and use a more explicit selected-row treatment on the canvas.
+
+## 2026-03-17: Schema-studio insertion and focus affordances
+- **Insert redundancy**: Keep drag/drop as the primary structural interaction, but let the canvas plus anchors open a type menu too so users can add fields without committing to drag gestures for every small edit.
+- **Detail layout**: Keep field settings and preview inputs adjacent beneath the canvas on desktop, because they are both local editing context and should not steal space from the main preview column.
+- **Selection emphasis**: Prefer node-focused selection cues such as a stronger pill state and compact marker chip over full-row washes, which made the tree feel heavier and less precise.
+
+## 2026-03-17: Schema-studio tree ergonomics follow-up
+- **Drag targeting**: Treat node movement as a secondary action with its own dedicated drag handle, instead of making the whole node pill both the primary selection target and the drag source.
+- **Branch management**: Allow object and array branches to collapse in-place so larger schemas stay scannable without abandoning the current tree-based mental model.
+- **Inspector readability**: Group the selected-field controls into lighter sections rather than one long uninterrupted form, because the response editor is now dense enough that scan order matters.
+
+## 2026-03-17: Schema-studio canvas architecture pivot
+- **Product direction**: Treat the current pill-tree schema builder as an interim authoring surface and pivot the schema studio toward a true canvas architecture that can eventually grow beyond pure schema editing into richer route, data-source, and transform flows.
+- **Library direction**: Use `Vue Flow` as the preferred foundation for the next prototype instead of layering a separate drag/drop library onto the bespoke tree, because the roadmap now values zoomable canvas composition and future graph extensibility more than incremental tree-only interaction tweaks.
+- **Contract safety**: Keep the backend `request_schema` / `response_schema`, `x-builder.order`, and `x-mock` model stable during the pivot so runtime behavior, OpenAPI output, preview generation, and import/export do not change just because the frontend authoring surface evolves.
+
+## 2026-03-17: Admin RBAC model
+- **Role model**: Replace the old boolean-only admin access model with explicit `viewer`, `editor`, and `superuser` roles, while still exposing `is_superuser` in responses for compatibility during the transition.
+- **Permission model**: Derive a small shared permission set from each role (`routes.read`, `routes.write`, `routes.preview`, `users.manage`) and enforce those permissions consistently in both FastAPI dependencies and the admin frontend.
+- **Migration strategy**: Keep the existing dashboard-user table and session flow, add a `role` column in place, backfill legacy users from `is_superuser`, and leave the backend schema/runtime contract untouched so RBAC does not ripple into public mock behavior or OpenAPI.
+
+## 2026-03-18: Account UX split for admin auth
+- **Personal vs global admin surfaces**: Split the old all-in-one `Security` screen into a personal `Profile` route and a separate `Users` management route so self-service account work does not compete visually with superuser administration.
+- **Navbar pattern**: Use a traditional account dropdown in the top bar for profile/sign-out navigation, while keeping high-frequency product surfaces like `Routes` and superuser-only `Users` visible as direct nav actions.
+- **API shape**: Add dedicated `/api/admin/account/me` read/update endpoints alongside the existing password-change flow, and keep `/api/admin/users` focused on true admin-user management with a conventional read-by-id endpoint.
+
+## 2026-03-18: Routed admin views should render a single root node
+- **Transition safety**: Keep routed admin pages under a single concrete root element when they sit inside the app-level router transition, because fragment-root views can leave the shell blank during `out-in` navigation even if a hard reload works.
+
+## 2026-03-18: Admin account polish and migration consistency
+- **Account-nav pattern**: Keep the top-bar account control as a username-plus-avatar button, not a generic `Account` label, and let the dropdown hold the richer identity details; when no custom avatar is set, fall back to Gravatar so the shell still feels personal and recognizable.
+- **Admin-user fields**: Treat optional `full_name`, `email`, and `avatar_url` as first-class admin-user attributes, expose them in both self-service profile editing and superuser user-management flows, and show searchable directory rows with recent account activity so the admin surface feels closer to a conventional app.
+- **Alembic consistency**: Make Alembic CLI runs resolve the configured DB URL from env/settings rather than trusting the legacy SQLite value in `alembic.ini`, so manual migration commands and startup migration bootstrap always target the same database.
+
+## 2026-03-18: Admin shell and user-management UX cleanup
+- **Shell hierarchy**: Keep the fixed top bar focused on brand, primary product navigation, theme control, and the username/avatar account menu; page titles belong inside the routed page content rather than being repeated in the shell header.
+- **Users workflow**: Treat the user directory as the primary `Users` screen, with one clear `New user` action that opens a dialog, because persistent side-by-side create forms made the page feel heavier and distracted from the main administration task.
+- **Theme discipline**: Any custom shell/page styling should derive contrast from Vuetify theme tokens instead of hard-coded light-on-dark values, so light and dark mode stay equally legible during future UI polish passes.
+
+## 2026-03-18: Public/admin security hardening baseline
+- **Landing-page bootstrap**: Never inline live catalog JSON into executable script assignments; embed reference payloads through an escaped `application/json` script block and parse them at runtime so stored endpoint content cannot break out into executable page script.
+- **Public routing**: Treat saved public paths as literal text plus explicit `{param}` placeholders, escape static segments before building match regexes, and keep the async catchall's sync DB/sample-generation work off the event loop so runtime traffic does not stall on synchronous SQLModel access.
+- **Admin auth**: Add baseline brute-force protection through per-account lockouts, per-IP throttling, and audit logging of failed/blocked/successful login attempts, while keeping `/api/admin/account/me` partial updates truly partial instead of requiring `username` on every profile edit.
+- **Headers**: Serve baseline browser hardening headers from both the FastAPI app and the admin runtime/dev shells, with CSP tuned separately for the public landing page, JSON API responses, and the Vite dev experience.
+
 
 *> Future decisions should append a dated entry with context and rationale.*

@@ -31,6 +31,7 @@ Supported internal schema extensions:
 - `x-mock.generator`: legacy alias for `x-mock.type`, still accepted for compatibility
 - `x-mock.options`: generator-specific settings
 - `x-mock.value`: literal JSON subtree returned when the node is fixed
+- `x-mock.template`: optional response-string template rendered after the node's base value is generated, with access to `value`, `request.path.*`, `request.query.*`, and `request.body.*`
 - `x-builder.order`: object property order used by the drag-and-drop builder
 
 Random generation respects standard JSON Schema keywords where useful:
@@ -46,6 +47,7 @@ Mode behavior:
 - `generate`: type-correct true random values.
 - `mocking`: type-correct values with a sharper Mockingbird tone, such as snarkier text, cheekier slugs/emails, sardonic company names, or longer quote/message copy that can gently roast the consumer.
 - `fixed`: static literal JSON returned exactly as configured.
+- If `x-mock.template` is present on a response `string` node, the node's base generated/fixed value is exposed as `{{value}}` and then wrapped with request-aware template tokens before the final string is returned.
 
 ## Request contract
 `request_schema` now carries both request-body and request-parameter authoring state.
@@ -63,11 +65,50 @@ The admin import/export flow uses a native Mockingbird JSON bundle for backup an
 - V1 imports match existing routes by normalized `method + path`; `slug` remains an internal field that can be de-duplicated during import.
 - Supported import modes are `create_only`, `upsert`, and `replace_all`, with dry-run previews available before any changes are applied.
 
+## AdminUser
+Represents a dashboard user who can sign into the private admin UI and API.
+
+Fields:
+- `id`: integer primary key
+- `username`: unique sign-in identifier
+- `full_name`: optional display name used in the admin UI
+- `email`: optional unique contact/login-recovery address for admin operations
+- `avatar_url`: optional custom profile image URL used in the admin UI
+- `password_hash`: stored password hash
+- `is_active`: whether the account can sign in
+- `role`: `viewer`, `editor`, or `superuser`
+- `is_superuser`: compatibility flag now derived from the role model in practice
+- `failed_login_attempts`: rolling failed-login counter used for brute-force protection
+- `last_failed_login_at`: timestamp of the last failed login attempt
+- `locked_until`: temporary lockout deadline after too many failed logins
+- `must_change_password`: whether the account is blocked on password rotation
+- `last_login_at`, `password_changed_at`: security audit timestamps
+- `created_at`, `updated_at`: audit timestamps
+
+Role behavior:
+- `viewer`: can browse the route catalog and use preview tools
+- `editor`: viewer permissions plus route/settings/schema mutations and route import
+- `superuser`: editor permissions plus admin-user management
+- Repeated failed sign-ins can temporarily lock an account, and the API also applies a client-IP throttle before password verification continues.
+
+Related admin endpoints:
+- `GET /api/admin/account/me`: returns the signed-in admin user's profile details
+- `PUT /api/admin/account/me`: updates the signed-in admin user's own account profile fields, currently `username`, `full_name`, `email`, and `avatar_url`
+- `POST /api/admin/account/change-password`: rotates the signed-in admin user's password and clears `must_change_password`
+- `GET /api/admin/users`: lists all admin users for superuser management
+- `GET /api/admin/users/{id}`: reads a specific admin user for superuser management
+- `POST /api/admin/users`: creates an admin user, including profile details and role/access flags
+- `PUT /api/admin/users/{id}`: updates an admin user, including profile details, password resets, and access flags
+- `DELETE /api/admin/users/{id}`: deletes an admin user and revokes any historical sessions tied to that account
+
+Response shape notes:
+- `AdminUserRead` now exposes the stored `avatar_url` plus a derived `gravatar_url`, so the frontend can show a consistent avatar even when no custom image has been configured yet.
+
 ## OpenAPI model
 The OpenAPI schema is generated dynamically by mapping `EndpointDefinition` fields to OpenAPI path entries.
 - The root `request_schema` body becomes `requestBody` for `POST` / `PUT` / `PATCH` after stripping internal request-parameter metadata.
 - `request_schema["x-request"]["path"]` and `request_schema["x-request"]["query"]` become OpenAPI `parameters`.
-- `response_schema` becomes response schema after stripping `x-mock` and `x-builder`.
+- `response_schema` becomes response schema after stripping `x-mock` (including template metadata) and `x-builder`.
 - `summary` and `description` are used in the OpenAPI operation.
 
 ## Public reference feed

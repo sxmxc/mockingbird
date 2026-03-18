@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from "vue";
-import { RouterView, useRoute, useRouter } from "vue-router";
+import { computed, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { useTheme } from "vuetify";
 import { ensureAuthBooted, useAuth } from "./composables/useAuth";
 import { useStudioTheme } from "./composables/useStudioTheme";
@@ -11,23 +11,49 @@ const router = useRouter();
 const auth = useAuth();
 const vuetifyTheme = useTheme();
 const studioTheme = useStudioTheme();
+const accountMenu = ref(false);
 
 onMounted(async () => {
-  vuetifyTheme.global.name.value = studioTheme.mode.value;
+  vuetifyTheme.change(studioTheme.mode.value);
   await ensureAuthBooted();
 });
 
 watch(
   studioTheme.mode,
   (value) => {
-    vuetifyTheme.global.name.value = value;
+    vuetifyTheme.change(value);
   },
   { immediate: true },
 );
 
-const pageTitle = computed(() => (typeof route.meta.title === "string" ? route.meta.title : "Mockingbird Admin"));
 const pageTransitionKey = computed(() => getPageTransitionKey(route));
-const isPublicRoute = computed(() => route.name === "login");
+const canBrowseRoutes = computed(() => auth.canReadRoutes.value && !auth.mustChangePassword.value);
+const canManageUsers = computed(() => auth.canManageUsers.value && !auth.mustChangePassword.value);
+const routesNavActive = computed(() =>
+  route.name === "endpoints-browse" ||
+  route.name === "endpoints-edit" ||
+  route.name === "endpoints-create" ||
+  route.name === "schema-editor" ||
+  route.name === "endpoint-preview",
+);
+const usersNavActive = computed(() => route.name === "users");
+const accountAvatarSrc = computed(() => auth.user.value?.avatar_url || auth.user.value?.gravatar_url || "");
+const accountDisplayName = computed(() => auth.user.value?.full_name?.trim() || auth.username.value || "Account");
+const accountIdentityLine = computed(() => {
+  const fullName = auth.user.value?.full_name?.trim();
+  const username = auth.username.value;
+  const email = auth.user.value?.email;
+
+  if (fullName) {
+    if (email && username) {
+      return `@${username} · ${email}`;
+    }
+
+    return email || (username ? `@${username}` : "");
+  }
+
+  return email || "";
+});
 
 function toggleTheme(): void {
   studioTheme.toggle();
@@ -37,11 +63,35 @@ function goToCatalog(): void {
   void router.push({ name: "endpoints-browse" });
 }
 
-function goToSecurity(): void {
-  void router.push({ name: "security" });
+function goToHome(): void {
+  if (canBrowseRoutes.value) {
+    goToCatalog();
+    return;
+  }
+
+  if (auth.isAuthenticated.value) {
+    void router.push({ name: "account-profile" });
+    return;
+  }
+
+  void router.push({ name: "login" });
+}
+
+function closeAccountDropdown(): void {
+  accountMenu.value = false;
+}
+
+function goToProfile(): void {
+  closeAccountDropdown();
+  void router.push({ name: "account-profile" });
+}
+
+function goToUsers(): void {
+  void router.push({ name: "users" });
 }
 
 async function signOut(): Promise<void> {
+  closeAccountDropdown();
   await auth.logout("You signed out.");
   void router.push({ name: "login" });
 }
@@ -49,19 +99,51 @@ async function signOut(): Promise<void> {
 
 <template>
   <v-app class="studio-app">
-    <v-app-bar class="studio-topbar" flat height="88">
-      <v-container class="d-flex align-center justify-space-between fill-height px-4" fluid>
-        <div class="d-flex align-center ga-4">
-          <div class="brand-mark">
+    <v-app-bar class="studio-topbar" flat height="76">
+      <v-container class="studio-topbar-inner fill-height px-3 px-sm-5" fluid>
+        <v-btn class="studio-brand-button px-0" variant="text" @click="goToHome">
+          <span class="brand-mark">
             <img alt="Mockingbird logo" class="brand-mark-image" src="/mockingbird-icon.svg">
-          </div>
-          <div>
-            <div class="text-overline text-medium-emphasis">Mockingbird</div>
-            <div class="text-h5 font-weight-bold">{{ pageTitle }}</div>
+          </span>
+          <span class="studio-brand-copy">
+            <span class="studio-brand-name">Mockingbird</span>
+            <span class="studio-brand-subtitle">Admin console</span>
+          </span>
+        </v-btn>
+
+        <div class="studio-topbar-center">
+          <div
+            v-if="auth.isAuthenticated.value && (canBrowseRoutes || canManageUsers)"
+            class="studio-primary-nav"
+          >
+            <v-btn
+              v-if="canBrowseRoutes"
+              :aria-current="routesNavActive ? 'page' : undefined"
+              :class="{ 'studio-primary-nav__button--active': routesNavActive }"
+              class="studio-primary-nav__button"
+              prepend-icon="mdi-view-dashboard-outline"
+              rounded="xl"
+              variant="text"
+              @click="goToCatalog"
+            >
+              Routes
+            </v-btn>
+            <v-btn
+              v-if="canManageUsers"
+              :aria-current="usersNavActive ? 'page' : undefined"
+              :class="{ 'studio-primary-nav__button--active': usersNavActive }"
+              class="studio-primary-nav__button"
+              prepend-icon="mdi-account-group-outline"
+              rounded="xl"
+              variant="text"
+              @click="goToUsers"
+            >
+              Users
+            </v-btn>
           </div>
         </div>
 
-        <div class="d-flex align-center ga-3">
+        <div class="studio-topbar-actions">
           <v-chip
             v-if="auth.status.value === 'restoring'"
             color="info"
@@ -73,25 +155,6 @@ async function signOut(): Promise<void> {
           </v-chip>
 
           <template v-else-if="auth.isAuthenticated.value">
-            <v-btn
-              :active="route.name === 'endpoints-browse' || route.name === 'endpoints-edit' || route.name === 'endpoints-create'"
-              prepend-icon="mdi-view-dashboard-outline"
-              variant="text"
-              @click="goToCatalog"
-            >
-              Routes
-            </v-btn>
-            <v-btn
-              :active="route.name === 'security'"
-              prepend-icon="mdi-shield-account-outline"
-              variant="text"
-              @click="goToSecurity"
-            >
-              Security
-            </v-btn>
-            <v-chip color="secondary" label prepend-icon="mdi-account-circle-outline" variant="tonal">
-              {{ auth.username.value }}
-            </v-chip>
             <v-chip
               v-if="auth.mustChangePassword.value"
               color="warning"
@@ -101,22 +164,65 @@ async function signOut(): Promise<void> {
             >
               Password reset required
             </v-chip>
+
+            <v-menu v-model="accountMenu" location="bottom end">
+              <template #activator="{ props: menuProps }">
+                <v-btn
+                  append-icon="mdi-chevron-down"
+                  color="secondary"
+                  rounded="xl"
+                  variant="text"
+                  v-bind="menuProps"
+                >
+                  <template #prepend>
+                    <v-avatar size="30">
+                      <v-img v-if="accountAvatarSrc" :src="accountAvatarSrc" cover />
+                      <v-icon v-else icon="mdi-account-circle-outline" />
+                    </v-avatar>
+                  </template>
+                  <span class="studio-account-label">{{ auth.username.value }}</span>
+                </v-btn>
+              </template>
+
+              <v-card class="studio-account-menu" min-width="296">
+                <v-card-text class="d-flex flex-column ga-3">
+                  <div class="d-flex align-center ga-3">
+                    <v-avatar size="44">
+                      <v-img v-if="accountAvatarSrc" :src="accountAvatarSrc" cover />
+                      <v-icon v-else icon="mdi-account-circle-outline" />
+                    </v-avatar>
+                    <div>
+                      <div class="text-overline text-medium-emphasis">Account</div>
+                      <div class="text-subtitle-1 font-weight-bold">{{ accountDisplayName }}</div>
+                      <div v-if="accountIdentityLine" class="text-body-2 text-medium-emphasis mt-1">
+                        {{ accountIdentityLine }}
+                      </div>
+                      <div class="text-body-2 text-medium-emphasis mt-1">{{ auth.roleLabel.value }}</div>
+                    </div>
+                  </div>
+
+                  <v-divider />
+
+                  <v-list class="pa-0" density="comfortable" nav>
+                    <v-list-item
+                      prepend-icon="mdi-account-cog-outline"
+                      rounded="lg"
+                      title="Profile"
+                      @click="goToProfile"
+                    />
+                    <v-list-item prepend-icon="mdi-logout" rounded="lg" title="Sign out" @click="void signOut()" />
+                  </v-list>
+                </v-card-text>
+              </v-card>
+            </v-menu>
           </template>
 
           <v-btn
             :icon="studioTheme.isDark.value ? 'mdi-weather-sunny' : 'mdi-weather-night'"
+            class="studio-theme-toggle"
             variant="text"
             @click="toggleTheme"
           />
-
-          <v-btn
-            v-if="auth.isAuthenticated.value && !isPublicRoute"
-            prepend-icon="mdi-logout"
-            variant="text"
-            @click="void signOut()"
-          >
-            Sign out
-          </v-btn>
         </div>
       </v-container>
     </v-app-bar>
